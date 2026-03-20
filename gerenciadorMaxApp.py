@@ -1,4 +1,5 @@
 import tkinter as tk
+from tkinter import W, END
 from tkinter import ttk, scrolledtext, messagebox, simpledialog
 from tkinter import filedialog
 import ttkbootstrap as bstrap
@@ -129,8 +130,8 @@ class ConfigWindow(tk.Toplevel):
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(fill=X, pady=(20, 0))
         
-        bstrap.Button(btn_frame, text="Salvar", command=self.salvar, bootstyle="danger").pack(side=RIGHT, padx=5)
-        bstrap.Button(btn_frame, text="Cancelar", command=self.destroy, bootstyle="secondary-outline").pack(side=RIGHT)
+        bstrap.Button(btn_frame, text="Salvar", command=self.salvar, bootstyle="success").pack(side=RIGHT, padx=5)
+        bstrap.Button(btn_frame, text="Cancelar", command=self.destroy, bootstyle="secondary").pack(side=RIGHT)
 
     def criar_campo(self, parent, label, var, is_dir):
         f = ttk.Frame(parent)
@@ -138,7 +139,7 @@ class ConfigWindow(tk.Toplevel):
         bstrap.Label(f, text=label, width=20, bootstyle="inverse-secondary").pack(side=LEFT)
         bstrap.Entry(f, textvariable=var, bootstyle="danger").pack(side=LEFT, fill=X, expand=YES, padx=5)
         cmd = lambda: self.selecionar(var, is_dir)
-        bstrap.Button(f, text="...", command=cmd, bootstyle="danger-outline", width=4).pack(side=LEFT)
+        bstrap.Button(f, text="...", command=cmd, bootstyle="info-outline", width=4).pack(side=LEFT)
 
     def selecionar(self, var, is_dir):
         p = filedialog.askdirectory() if is_dir else filedialog.askopenfilename()
@@ -209,7 +210,7 @@ class GerenciadorMaxApp(bstrap.Window):
         self.setup_restore(tab_restore)
         self.setup_tools(tab_tools)
 
-        self.status = bstrap.Label(self, text="Pronto.", relief=SUNKEN, anchor=W, padding=5, bootstyle="secondary")
+        self.status = bstrap.Label(self, text="Pronto.", relief=FLAT, anchor=W, padding=8, bootstyle="secondary")
         self.status.pack(side=BOTTOM, fill=X)
 
     # --- ABA 1: LAUNCHER ---
@@ -241,7 +242,9 @@ class GerenciadorMaxApp(bstrap.Window):
         v_frame = bstrap.Labelframe(parent, text=" Versões Disponíveis ", bootstyle="danger", padding=15)
         v_frame.pack(fill=BOTH, expand=YES, pady=10)
 
-        self.lb_versoes = tk.Listbox(v_frame, height=8, bg="#222", fg="#fff", selectbackground="#d9534f")
+        self.lb_versoes = ttk.Treeview(v_frame, height=8, bootstyle="danger", columns=("versao"), show="headings")
+        self.lb_versoes.heading("versao", text="Versões Disponíveis")
+        self.lb_versoes.column("versao", width=300, anchor=W)
         sb = bstrap.Scrollbar(v_frame, command=self.lb_versoes.yview, bootstyle="danger-round")
         self.lb_versoes.config(yscrollcommand=sb.set)
         sb.pack(side=RIGHT, fill=Y)
@@ -250,8 +253,8 @@ class GerenciadorMaxApp(bstrap.Window):
         bts = bstrap.Frame(parent)
         bts.pack(fill=X)
         
-        bstrap.Button(bts, text="Recarregar", command=self.popular_versoes, bootstyle="secondary-outline").pack(side=LEFT)
-        bstrap.Button(bts, text="EXECUTAR SISTEMA", command=self.lancar_erp, bootstyle="danger-outline").pack(side=RIGHT, padx=5)
+        bstrap.Button(bts, text="Recarregar", command=self.popular_versoes, bootstyle="info-outline").pack(side=LEFT)
+        bstrap.Button(bts, text="EXECUTAR SISTEMA", command=self.lancar_erp, bootstyle="success-outline").pack(side=RIGHT, padx=5)
         bstrap.Button(bts, text="ATUALIZAR VERSÃO", command=self.lancar_atualizacao, bootstyle="danger").pack(side=RIGHT)
 
     # --- ABA 2: RESTORE ---
@@ -259,7 +262,9 @@ class GerenciadorMaxApp(bstrap.Window):
         f1 = bstrap.Labelframe(parent, text=" 1. Selecione o Backup ", bootstyle="danger", padding=10)
         f1.pack(fill=BOTH, expand=YES)
         
-        self.lb_backups = tk.Listbox(f1, height=10, bg="#222", fg="#fff", selectbackground="#d9534f")
+        self.lb_backups = ttk.Treeview(f1, height=10, bootstyle="danger", columns=("backup"), show="headings")
+        self.lb_backups.heading("backup", text="Backups Disponíveis")
+        self.lb_backups.column("backup", width=300, anchor=tk.W)
         sb = bstrap.Scrollbar(f1, command=self.lb_backups.yview, bootstyle="danger-round")
         self.lb_backups.config(yscrollcommand=sb.set)
         sb.pack(side=RIGHT, fill=Y)
@@ -290,7 +295,12 @@ class GerenciadorMaxApp(bstrap.Window):
         flist = bstrap.Labelframe(parent, text=" Bancos SQL ", bootstyle="danger", padding=10)
         flist.pack(fill=BOTH, expand=YES)
         
-        self.lb_tools = tk.Listbox(flist, bg="#222", fg="#fff", selectbackground="#d9534f")
+        self.lb_tools = ttk.Treeview(flist, height=10, bootstyle="danger", columns=("banco"), show="headings")
+        self.lb_tools.heading("banco", text="Bancos de Dados")
+        self.lb_tools.column("banco", width=300, anchor=tk.W)
+        sb = bstrap.Scrollbar(flist, command=self.lb_tools.yview, bootstyle="danger-round")
+        self.lb_tools.config(yscrollcommand=sb.set)
+        sb.pack(side=RIGHT, fill=Y)
         self.lb_tools.pack(side=LEFT, fill=BOTH, expand=YES)
         
         fbtn = bstrap.Frame(flist)
@@ -330,8 +340,8 @@ class GerenciadorMaxApp(bstrap.Window):
         bancos = self.listar_sql_dbs()
         self.combo_db['values'] = bancos
         if atual in bancos: self.combo_db.set(atual)
-        self.lb_tools.delete(0, END)
-        for b in bancos: self.lb_tools.insert(END, b)
+        for i in self.lb_tools.get_children(): self.lb_tools.delete(i)
+        for b in bancos: self.lb_tools.insert("", tk.END, values=(b,))
 
     def preview_version(self, e):
         db = self.combo_db.get()
@@ -362,10 +372,10 @@ class GerenciadorMaxApp(bstrap.Window):
         except Exception as e: messagebox.showerror("Erro", f"{e}")
 
     def popular_versoes(self):
-        self.lb_versoes.delete(0, END)
+        for i in self.lb_versoes.get_children(): self.lb_versoes.delete(i)
         try:
             for f in sorted([x for x in os.listdir(PASTA_DAS_VERSOES) if x.lower().endswith('.rar')], reverse=True):
-                self.lb_versoes.insert(END, f)
+                self.lb_versoes.insert("", END, values=(f,))
         except: pass
 
     def lancar_erp(self):
@@ -373,9 +383,9 @@ class GerenciadorMaxApp(bstrap.Window):
         except Exception as e: messagebox.showerror("Erro", f"{e}")
 
     def lancar_atualizacao(self):
-        sel = self.lb_versoes.curselection()
+        sel = self.lb_versoes.selection()
         if not sel: return
-        arq = self.lb_versoes.get(sel[0])
+        arq = self.lb_versoes.item(sel[0], "values")[0]
         if messagebox.askyesno("Confirmar", f"Atualizar para {arq}?"):
             threading.Thread(target=self.thread_extrair, args=(arq,), daemon=True).start()
 
@@ -398,17 +408,17 @@ class GerenciadorMaxApp(bstrap.Window):
         except Exception as e: messagebox.showerror("Erro", f"{e}")
 
     def load_backups(self):
-        self.lb_backups.delete(0, END)
+        for i in self.lb_backups.get_children(): self.lb_backups.delete(i)
         try:
-            fs = [f for f in os.listdir(self.caminho_backup) if f.upper().endswith(('.MAX','.BAK','.ZIP','.RAR'))]
+            fs = [f for f in os.listdir(self.caminho_backup) if f.upper().endswith((".MAX",".BAK",".ZIP",".RAR"))]
             for f in sorted(fs, key=lambda x: os.path.getmtime(os.path.join(self.caminho_backup, x)), reverse=True):
-                self.lb_backups.insert(END, f)
+                self.lb_backups.insert("", tk.END, values=(f,))
         except: pass
 
     def iniciar_restore_thread(self):
         try: 
-            sel = self.lb_backups.curselection()[0]
-            fname = self.lb_backups.get(sel)
+            sel = self.lb_backups.selection()[0]
+            fname = self.lb_backups.item(sel, "values")[0]
         except: return
         new_db = self.entry_new_db.get().strip()
         if not new_db: return
@@ -503,13 +513,13 @@ class GerenciadorMaxApp(bstrap.Window):
 
     def atualizar_tools(self):
         dbs = self.listar_sql_dbs()
-        self.lb_tools.delete(0, END)
-        for d in dbs: self.lb_tools.insert(END, d)
+        for i in self.lb_tools.get_children(): self.lb_tools.delete(i)
+        for d in dbs: self.lb_tools.insert("", tk.END, values=(d,))
 
     def drop_database(self):
-        sel = self.lb_tools.curselection()
+        sel = self.lb_tools.selection()
         if not sel: return
-        db = self.lb_tools.get(sel[0])
+        db = self.lb_tools.item(sel[0], "values")[0]
         
         if db == self.lbl_db_atual.cget("text"):
             messagebox.showerror("Bloqueado", "Não apague o banco definido no INI.")
