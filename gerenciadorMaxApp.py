@@ -201,14 +201,17 @@ class GerenciadorMaxApp(bstrap.Window):
         tab_launch = bstrap.Frame(self.notebook, padding=15)
         tab_restore = bstrap.Frame(self.notebook, padding=15)
         tab_tools = bstrap.Frame(self.notebook, padding=15)
+        tab_config = bstrap.Frame(self.notebook, padding=15)
 
-        self.notebook.add(tab_launch, text="Launcher")
-        self.notebook.add(tab_restore, text="Restore")
-        self.notebook.add(tab_tools, text="Ferramentas")
+        self.notebook.add(tab_launch, text="🚀 Launcher")
+        self.notebook.add(tab_restore, text="📦 Restore")
+        self.notebook.add(tab_tools, text="🛠️ Ferramentas")
+        self.notebook.add(tab_config, text="⚙️ Configurações")
 
         self.setup_launcher(tab_launch)
         self.setup_restore(tab_restore)
         self.setup_tools(tab_tools)
+        self.setup_config(tab_config)
 
         self.status = bstrap.Label(self, text="Pronto.", relief=FLAT, anchor=W, padding=8, bootstyle="secondary")
         self.status.pack(side=BOTTOM, fill=X)
@@ -242,6 +245,13 @@ class GerenciadorMaxApp(bstrap.Window):
         v_frame = bstrap.Labelframe(parent, text=" Versões Disponíveis ", bootstyle="danger", padding=15)
         v_frame.pack(fill=BOTH, expand=YES, pady=10)
 
+        f_busca = bstrap.Frame(v_frame)
+        f_busca.pack(fill=X, pady=(0, 5))
+        bstrap.Label(f_busca, text="🔍 Buscar:").pack(side=LEFT)
+        self.var_busca_versao = tk.StringVar()
+        self.var_busca_versao.trace("w", self.filtrar_versoes)
+        bstrap.Entry(f_busca, textvariable=self.var_busca_versao, bootstyle="danger").pack(side=LEFT, fill=X, expand=YES, padx=5)
+
         self.lb_versoes = ttk.Treeview(v_frame, height=8, bootstyle="danger", columns=("versao"), show="headings")
         self.lb_versoes.heading("versao", text="Versões Disponíveis")
         self.lb_versoes.column("versao", width=300, anchor=W)
@@ -253,15 +263,22 @@ class GerenciadorMaxApp(bstrap.Window):
         bts = bstrap.Frame(parent)
         bts.pack(fill=X)
         
-        bstrap.Button(bts, text="Recarregar", command=self.popular_versoes, bootstyle="info-outline").pack(side=LEFT)
-        bstrap.Button(bts, text="EXECUTAR SISTEMA", command=self.lancar_erp, bootstyle="success-outline").pack(side=RIGHT, padx=5)
-        bstrap.Button(bts, text="ATUALIZAR VERSÃO", command=self.lancar_atualizacao, bootstyle="danger").pack(side=RIGHT)
+        bstrap.Button(bts, text="🔄 Recarregar", command=self.popular_versoes, bootstyle="info-outline").pack(side=LEFT)
+        bstrap.Button(bts, text="▶️ EXECUTAR SISTEMA", command=self.lancar_erp, bootstyle="success-outline").pack(side=RIGHT, padx=5)
+        bstrap.Button(bts, text="⬇️ ATUALIZAR VERSÃO", command=self.lancar_atualizacao, bootstyle="danger").pack(side=RIGHT)
 
     # --- ABA 2: RESTORE ---
     def setup_restore(self, parent):
         f1 = bstrap.Labelframe(parent, text=" 1. Selecione o Backup ", bootstyle="danger", padding=10)
         f1.pack(fill=BOTH, expand=YES)
         
+        f_busca = bstrap.Frame(f1)
+        f_busca.pack(fill=X, pady=(0, 5))
+        bstrap.Label(f_busca, text="🔍 Buscar:").pack(side=LEFT)
+        self.var_busca_backup = tk.StringVar()
+        self.var_busca_backup.trace("w", self.filtrar_backups)
+        bstrap.Entry(f_busca, textvariable=self.var_busca_backup, bootstyle="danger").pack(side=LEFT, fill=X, expand=YES, padx=5)
+
         self.lb_backups = ttk.Treeview(f1, height=10, bootstyle="danger", columns=("backup"), show="headings")
         self.lb_backups.heading("backup", text="Backups Disponíveis")
         self.lb_backups.column("backup", width=300, anchor=tk.W)
@@ -269,7 +286,7 @@ class GerenciadorMaxApp(bstrap.Window):
         self.lb_backups.config(yscrollcommand=sb.set)
         sb.pack(side=RIGHT, fill=Y)
         self.lb_backups.pack(side=LEFT, fill=BOTH, expand=YES)
-        bstrap.Button(f1, text="Atualizar Lista", command=self.load_backups, bootstyle="link-danger").pack(fill=X)
+        bstrap.Button(f1, text="🔄 Atualizar Lista", command=self.load_backups, bootstyle="link-danger").pack(fill=X)
 
         f2 = bstrap.Labelframe(parent, text=" 2. Nome do Novo Banco ", bootstyle="danger", padding=10)
         f2.pack(fill=X, pady=10)
@@ -279,7 +296,7 @@ class GerenciadorMaxApp(bstrap.Window):
         f3 = bstrap.Frame(parent)
         f3.pack(fill=BOTH, expand=YES)
         
-        self.btn_restore = bstrap.Button(f3, text="INICIAR RESTAURAÇÃO", command=self.iniciar_restore_thread, bootstyle="danger")
+        self.btn_restore = bstrap.Button(f3, text="▶️ INICIAR RESTAURAÇÃO", command=self.iniciar_restore_thread, bootstyle="danger")
         self.btn_restore.pack(fill=X, pady=5)
         
         self.progress = bstrap.Progressbar(f3, mode='indeterminate', bootstyle="danger-striped")
@@ -295,6 +312,13 @@ class GerenciadorMaxApp(bstrap.Window):
         flist = bstrap.Labelframe(parent, text=" Bancos SQL ", bootstyle="danger", padding=10)
         flist.pack(fill=BOTH, expand=YES)
         
+        f_busca = bstrap.Frame(flist)
+        f_busca.pack(fill=X, pady=(0, 5))
+        bstrap.Label(f_busca, text="🔍 Buscar:").pack(side=LEFT)
+        self.var_busca_banco = tk.StringVar()
+        self.var_busca_banco.trace("w", self.filtrar_bancos)
+        bstrap.Entry(f_busca, textvariable=self.var_busca_banco, bootstyle="danger").pack(side=LEFT, fill=X, expand=YES, padx=5)
+
         self.lb_tools = ttk.Treeview(flist, height=10, bootstyle="danger", columns=("banco"), show="headings")
         self.lb_tools.heading("banco", text="Bancos de Dados")
         self.lb_tools.column("banco", width=300, anchor=tk.W)
@@ -306,8 +330,85 @@ class GerenciadorMaxApp(bstrap.Window):
         fbtn = bstrap.Frame(flist)
         fbtn.pack(side=RIGHT, fill=Y, padx=10)
         
-        bstrap.Button(fbtn, text="Atualizar", command=self.atualizar_tools, bootstyle="secondary-outline").pack(fill=X, pady=5)
-        bstrap.Button(fbtn, text="EXCLUIR (DROP)", command=self.drop_database, bootstyle="danger").pack(fill=X, pady=20)
+        bstrap.Button(fbtn, text="🔄 Atualizar", command=self.atualizar_tools, bootstyle="secondary-outline").pack(fill=X, pady=5)
+        bstrap.Button(fbtn, text="🗑️ EXCLUIR (DROP)", command=self.drop_database, bootstyle="danger").pack(fill=X, pady=20)
+
+    # --- ABA 4: CONFIGURAÇÕES ---
+    def setup_config(self, parent):
+        scroll_canvas = bstrap.Canvas(parent, highlightthickness=0)
+        scrollbar = bstrap.Scrollbar(parent, orient="vertical", command=scroll_canvas.yview)
+        scroll_frame = bstrap.Frame(scroll_canvas)
+        
+        scroll_frame.bind("<Configure>", lambda e: scroll_canvas.configure(scrollregion=scroll_canvas.bbox("all")))
+        scroll_canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        scroll_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        scroll_canvas.pack(side=LEFT, fill=BOTH, expand=YES)
+        scrollbar.pack(side=RIGHT, fill=Y)
+        
+        bstrap.Label(scroll_frame, text="Configurações do Sistema", font=("bold", 14), bootstyle="danger").pack(pady=10)
+        
+        self.cfg_vars = {}
+        
+        def add_section(title, keys, ini_section):
+            f = bstrap.Labelframe(scroll_frame, text=f" {title} ", bootstyle="danger", padding=10)
+            f.pack(fill=X, pady=5, padx=5)
+            
+            c = configparser.ConfigParser()
+            c.read(CONFIG_FILE_NAME, encoding='utf-8')
+            
+            for key in keys:
+                row = bstrap.Frame(f)
+                row.pack(fill=X, pady=2)
+                bstrap.Label(row, text=key, width=25, bootstyle="secondary").pack(side=LEFT)
+                var = tk.StringVar(value=c.get(ini_section, key, fallback=""))
+                self.cfg_vars[(ini_section, key)] = var
+                bstrap.Entry(row, textvariable=var, bootstyle="danger").pack(side=LEFT, fill=X, expand=YES)
+                
+        add_section("Caminhos", ["PASTA_DO_SISTEMA", "PASTA_DAS_VERSOES", "CAMINHO_DO_INI", "CAMINHO_DO_7ZIP_EXE"], "CAMINHOS")
+        add_section("Executáveis", ["NOME_EXE_CLIENTE", "NOME_EXE_ATUALIZADOR"], "EXECUTAVEIS")
+        add_section("SQL Laudo", ["SQL_DRIVER_LISTA", "SQL_SERVER_INSTANCE"], "SQL_LAUDO")
+        add_section("SQL Restore", ["SERVIDOR", "USUARIO", "SENHA", "ODBC_DRIVER_RESTORE"], "SQL_RESTORE")
+        add_section("Config INI MAX", ["INI_SECTION", "INI_KEY"], "CONFIG_INI_MAX")
+        
+        bstrap.Button(scroll_frame, text="💾 Salvar Configurações", command=self.salvar_config_aba, bootstyle="success").pack(pady=20)
+
+    def salvar_config_aba(self):
+        try:
+            c = configparser.ConfigParser()
+            c.read(CONFIG_FILE_NAME, encoding='utf-8')
+            for (section, key), var in self.cfg_vars.items():
+                if not c.has_section(section): c.add_section(section)
+                c.set(section, key, var.get())
+            with open(CONFIG_FILE_NAME, 'w', encoding='utf-8') as f: c.write(f)
+            carregar_ou_criar_configuracoes(root_para_aviso=self)
+            validar_caminhos()
+            self.caminho_backup = CAMINHO_BASE_MAX_BACKUP
+            messagebox.showinfo("Sucesso", "Configurações salvas com sucesso!")
+            self.popular_versoes()
+            self.load_backups()
+            self.carregar_banco_atual()
+        except Exception as e:
+            messagebox.showerror("Erro", f"Erro ao salvar: {e}")
+
+    # --- LÓGICA DE FILTROS ---
+    def filtrar_versoes(self, *args):
+        busca = self.var_busca_versao.get().lower()
+        for i in self.lb_versoes.get_children(): self.lb_versoes.delete(i)
+        for v in getattr(self, '_all_versoes', []):
+            if busca in v.lower(): self.lb_versoes.insert("", END, values=(v,))
+
+    def filtrar_backups(self, *args):
+        busca = self.var_busca_backup.get().lower()
+        for i in self.lb_backups.get_children(): self.lb_backups.delete(i)
+        for b in getattr(self, '_all_backups', []):
+            if busca in b.lower(): self.lb_backups.insert("", tk.END, values=(b,))
+
+    def filtrar_bancos(self, *args):
+        busca = self.var_busca_banco.get().lower()
+        for i in self.lb_tools.get_children(): self.lb_tools.delete(i)
+        for d in getattr(self, '_all_dbs', []):
+            if busca in d.lower(): self.lb_tools.insert("", tk.END, values=(d,))
 
     # =========================================================================
     # LÓGICA DO SISTEMA
@@ -340,8 +441,8 @@ class GerenciadorMaxApp(bstrap.Window):
         bancos = self.listar_sql_dbs()
         self.combo_db['values'] = bancos
         if atual in bancos: self.combo_db.set(atual)
-        for i in self.lb_tools.get_children(): self.lb_tools.delete(i)
-        for b in bancos: self.lb_tools.insert("", tk.END, values=(b,))
+        self._all_dbs = bancos
+        self.filtrar_bancos()
 
     def preview_version(self, e):
         db = self.combo_db.get()
@@ -372,15 +473,51 @@ class GerenciadorMaxApp(bstrap.Window):
         except Exception as e: messagebox.showerror("Erro", f"{e}")
 
     def popular_versoes(self):
-        for i in self.lb_versoes.get_children(): self.lb_versoes.delete(i)
         try:
-            for f in sorted([x for x in os.listdir(PASTA_DAS_VERSOES) if x.lower().endswith('.rar')], reverse=True):
-                self.lb_versoes.insert("", END, values=(f,))
+            self._all_versoes = sorted([x for x in os.listdir(PASTA_DAS_VERSOES) if x.lower().endswith('.rar')], reverse=True)
+            self.filtrar_versoes()
         except: pass
 
+    def get_exe_versao(self, caminho_exe):
+        try:
+            import win32api
+            info = win32api.GetFileVersionInfo(caminho_exe, "\\")
+            ms = info['FileVersionMS']
+            ls = info['FileVersionLS']
+            import win32api as wa
+            return f"{wa.HIWORD(ms)}.{wa.LOWORD(ms)}.{wa.HIWORD(ls)}.{wa.LOWORD(ls)}"
+        except:
+            return None
+
     def lancar_erp(self):
-        try: subprocess.Popen([CAMINHO_DO_ERP_CLIENTE], cwd=PASTA_DO_SISTEMA)
-        except Exception as e: messagebox.showerror("Erro", f"{e}")
+        try:
+            db_atual = self.lbl_db_atual.cget("text")
+            db_versao = self.get_versao(db_atual)
+            exe_versao = self.get_exe_versao(CAMINHO_DO_ERP_CLIENTE)
+
+            if db_versao and exe_versao and db_versao != "---" and db_versao != "N/A" and exe_versao != db_versao:
+                # Procura a versão nas pastas
+                arquivo_rar = None
+                for v in getattr(self, '_all_versoes', []):
+                    if db_versao in v:
+                        arquivo_rar = v
+                        break
+                
+                if arquivo_rar:
+                    if messagebox.askyesno("Atualização Necessária", 
+                        f"A versão do banco de dados ({db_versao}) é diferente da versão do executável atual ({exe_versao}).\n\n"
+                        f"Deseja atualizar automaticamente usando a versão '{arquivo_rar}' antes de abrir o sistema?"):
+                        # Extrai e abre o atualizador
+                        import threading
+                        threading.Thread(target=self.thread_extrair, args=(arquivo_rar,), daemon=True).start()
+                        return
+                else:
+                    messagebox.showwarning("Aviso de Versão", 
+                        f"A versão do banco ({db_versao}) difere do executável ({exe_versao}), mas o arquivo .RAR correspondente não foi encontrado na pasta de versões.\n\nIniciando sistema mesmo assim...")
+            
+            subprocess.Popen([CAMINHO_DO_ERP_CLIENTE], cwd=PASTA_DO_SISTEMA)
+        except Exception as e:
+            messagebox.showerror("Erro", f"Erro ao executar: {e}")
 
     def lancar_atualizacao(self):
         sel = self.lb_versoes.selection()
@@ -408,11 +545,10 @@ class GerenciadorMaxApp(bstrap.Window):
         except Exception as e: messagebox.showerror("Erro", f"{e}")
 
     def load_backups(self):
-        for i in self.lb_backups.get_children(): self.lb_backups.delete(i)
         try:
             fs = [f for f in os.listdir(self.caminho_backup) if f.upper().endswith((".MAX",".BAK",".ZIP",".RAR"))]
-            for f in sorted(fs, key=lambda x: os.path.getmtime(os.path.join(self.caminho_backup, x)), reverse=True):
-                self.lb_backups.insert("", tk.END, values=(f,))
+            self._all_backups = sorted(fs, key=lambda x: os.path.getmtime(os.path.join(self.caminho_backup, x)), reverse=True)
+            self.filtrar_backups()
         except: pass
 
     def iniciar_restore_thread(self):
@@ -512,9 +648,8 @@ class GerenciadorMaxApp(bstrap.Window):
         self.after(100, self.process_queue)
 
     def atualizar_tools(self):
-        dbs = self.listar_sql_dbs()
-        for i in self.lb_tools.get_children(): self.lb_tools.delete(i)
-        for d in dbs: self.lb_tools.insert("", tk.END, values=(d,))
+        self._all_dbs = self.listar_sql_dbs()
+        self.filtrar_bancos()
 
     def drop_database(self):
         sel = self.lb_tools.selection()
@@ -525,14 +660,19 @@ class GerenciadorMaxApp(bstrap.Window):
             messagebox.showerror("Bloqueado", "Não apague o banco definido no INI.")
             return
 
-        if messagebox.askyesno("PERIGO", f"DELETAR '{db}' permanentemente?"):
+        confirmacao = simpledialog.askstring("PERIGO", f"DELETAR '{db}' permanentemente?\n\nDigite o nome exato do banco '{db}' para confirmar:")
+        if confirmacao == db:
             try:
                 conn_str = f"DRIVER={ODBC_DRIVER_RESTORE};SERVER={SERVIDOR};UID={USUARIO};PWD={SENHA};DATABASE=master"
                 with pyodbc.connect(conn_str, autocommit=True) as conn:
                     conn.cursor().execute(f"ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{db}]")
                 messagebox.showinfo("Sucesso", "Banco Apagado.")
                 self.carregar_banco_atual()
+                self.atualizar_tools()
             except Exception as e: messagebox.showerror("Erro", f"{e}")
+        else:
+            if confirmacao is not None:
+                messagebox.showwarning("Cancelado", "Nome digitado não confere. Operação cancelada.")
 
 def validar_caminhos():
     global CAMINHO_DO_ERP_CLIENTE, CAMINHO_DO_MAX_ATUALIZA, CAMINHO_BASE_MAX_BACKUP
