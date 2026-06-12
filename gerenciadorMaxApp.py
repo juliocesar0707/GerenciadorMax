@@ -1,9 +1,8 @@
 import tkinter as tk
-from tkinter import W, END
+from tkinter import W, END, BOTH, YES, X, Y, LEFT, RIGHT, FLAT, BOTTOM
 from tkinter import ttk, scrolledtext, messagebox, simpledialog
 from tkinter import filedialog
 import ttkbootstrap as bstrap
-from ttkbootstrap.constants import *
 import os
 import pyodbc
 import threading
@@ -25,67 +24,84 @@ except ImportError:
 CONFIG_FILE_NAME = 'gerenciador_config.ini'
 SQL_QUERY_VERSAO = "select cofMaxAtualizaVersao from config" 
 
-PASTA_DO_SISTEMA = None
-NOME_EXE_CLIENTE = None
-NOME_EXE_ATUALIZADOR = None
-PASTA_DAS_VERSOES = None
-CAMINHO_DO_INI = None
-CAMINHO_DO_7ZIP_EXE = None
-INI_SECTION = None
-INI_KEY = None
-SERVIDOR = None
-USUARIO = None
-SENHA = None
-ODBC_DRIVER_RESTORE = None
-SQL_DRIVER_LISTA = None
-SQL_SERVER_INSTANCE = None
+PASTA_DO_SISTEMA = ""
+NOME_EXE_CLIENTE = ""
+NOME_EXE_ATUALIZADOR = ""
+PASTA_DAS_VERSOES = ""
+CAMINHO_BASE_MAX_BACKUP = ""
+CAMINHO_DO_INI = ""
+CAMINHO_DO_7ZIP_EXE = ""
+INI_SECTION = ""
+INI_KEY = ""
+SERVIDOR = ""
+USUARIO = ""
+SENHA = ""
+ODBC_DRIVER_RESTORE = ""
+SQL_DRIVER_LISTA = ""
+SQL_SERVER_INSTANCE = ""
 
-CAMINHO_DO_ERP_CLIENTE = None
-CAMINHO_DO_MAX_ATUALIZA = None
-CAMINHO_BASE_MAX_BACKUP = None
+CAMINHO_DO_ERP_CLIENTE = ""
+CAMINHO_DO_MAX_ATUALIZA = ""
+
+PRIMEIRA_EXECUCAO = False
 
 # =============================================================================
-# FUNÇÕES DE CONFIGURAÇÃO
+# FUNÇÕES DE CONFIGURAÇÃO (AUTO-DETECT INTELIGENTE)
 # =============================================================================
-def carregar_ou_criar_configuracoes(root_para_aviso=None):
+def carregar_ou_criar_configuracoes():
     global PASTA_DO_SISTEMA, NOME_EXE_CLIENTE, NOME_EXE_ATUALIZADOR, PASTA_DAS_VERSOES
-    global CAMINHO_DO_INI, CAMINHO_DO_7ZIP_EXE, INI_SECTION, INI_KEY, SERVIDOR
-    global USUARIO, SENHA, ODBC_DRIVER_RESTORE, SQL_DRIVER_LISTA, SQL_SERVER_INSTANCE
-    
+    global CAMINHO_BASE_MAX_BACKUP, CAMINHO_DO_INI, CAMINHO_DO_7ZIP_EXE, INI_SECTION, INI_KEY
+    global SERVIDOR, USUARIO, SENHA, ODBC_DRIVER_RESTORE, SQL_DRIVER_LISTA, SQL_SERVER_INSTANCE
+    global PRIMEIRA_EXECUCAO
+
+    # Onde o executável está rodando agora?
+    BASE_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
+
+    # AUTO-DETECT MULTI-DISCO (C:\ ou D:\)
+    if os.path.exists(os.path.join(BASE_DIR, 'max.ini')):
+        default_sistema = BASE_DIR
+    elif os.path.exists(r'C:\Max'):
+        default_sistema = r'C:\Max'
+    elif os.path.exists(r'D:\Max'):
+        default_sistema = r'D:\Max'
+    else:
+        default_sistema = r'C:\Max' # Se não achar nada, sugere C:\ como padrão
+
     config = configparser.ConfigParser()
     
-    # Se não existir, cria o padrão
+    # Auto-detect do 7-Zip
+    _7z_path = r'C:\Program Files\7-Zip\7z.exe'
+    if not os.path.exists(_7z_path):
+        _7z_path = r'C:\Program Files (x86)\7-Zip\7z.exe'
+
+    # SETUP DA PRIMEIRA EXECUÇÃO
     if not os.path.exists(CONFIG_FILE_NAME):
+        PRIMEIRA_EXECUCAO = True
         config['CAMINHOS'] = {
-            'PASTA_DO_SISTEMA': r'D:\Max',
-            'PASTA_DAS_VERSOES': r'D:\Max\Versões',
-            'CAMINHO_DO_INI': r'D:\Max\max.ini',
-            'CAMINHO_DO_7ZIP_EXE': r'C:\Program Files (x86)\7-Zip\7z.exe'
+            'PASTA_DO_SISTEMA': default_sistema,
+            'PASTA_DAS_VERSOES': os.path.join(default_sistema, 'Versões'),
+            'PASTA_DE_BACKUP': os.path.join(default_sistema, 'backup'),
+            'CAMINHO_DO_INI': os.path.join(default_sistema, 'max.ini'),
+            'CAMINHO_DO_7ZIP_EXE': _7z_path
         }
         config['EXECUTAVEIS'] = {
             'NOME_EXE_CLIENTE': 'MAX_manager2.exe',
             'NOME_EXE_ATUALIZADOR': 'MAX_Atualiza.exe'
         }
         config['CONFIG_INI_MAX'] = {'INI_SECTION': 'CON', 'INI_KEY': 'Initial catalog'}
-        config['SQL_LAUDO'] = {
-            'SQL_DRIVER_LISTA': '{ODBC Driver 17 for SQL Server}',
-            'SQL_SERVER_INSTANCE': 'localhost'
-        }
-        config['SQL_RESTORE'] = {
-            'SERVIDOR': 'localhost', 'USUARIO': 'sa', 'SENHA': 'macro01',
-            'ODBC_DRIVER_RESTORE': '{ODBC Driver 17 for SQL Server}'
-        }
+        config['SQL_LAUDO'] = {'SQL_DRIVER_LISTA': '{ODBC Driver 17 for SQL Server}', 'SQL_SERVER_INSTANCE': 'localhost'}
+        config['SQL_RESTORE'] = {'SERVIDOR': 'localhost', 'USUARIO': 'sa', 'SENHA': 'macro01', 'ODBC_DRIVER_RESTORE': '{ODBC Driver 17 for SQL Server}'}
+        
         try:
             with open(CONFIG_FILE_NAME, 'w', encoding='utf-8') as f: config.write(f)
-            messagebox.showinfo("Configuração", f"Arquivo '{CONFIG_FILE_NAME}' criado.", parent=root_para_aviso)
-            sys.exit()
-        except: sys.exit()
-    
-    # Lê o arquivo
+        except: pass
+
+    # LEITURA DAS VARIÁVEIS (Usa o que está salvo no INI)
     try:
         config.read(CONFIG_FILE_NAME, encoding='utf-8')
         PASTA_DO_SISTEMA = config.get('CAMINHOS', 'PASTA_DO_SISTEMA')
         PASTA_DAS_VERSOES = config.get('CAMINHOS', 'PASTA_DAS_VERSOES')
+        CAMINHO_BASE_MAX_BACKUP = config.get('CAMINHOS', 'PASTA_DE_BACKUP', fallback=os.path.join(PASTA_DO_SISTEMA, 'backup'))
         CAMINHO_DO_INI = config.get('CAMINHOS', 'CAMINHO_DO_INI')
         CAMINHO_DO_7ZIP_EXE = config.get('CAMINHOS', 'CAMINHO_DO_7ZIP_EXE')
         NOME_EXE_CLIENTE = config.get('EXECUTAVEIS', 'NOME_EXE_CLIENTE')
@@ -99,19 +115,20 @@ def carregar_ou_criar_configuracoes(root_para_aviso=None):
         SENHA = config.get('SQL_RESTORE', 'SENHA')
         ODBC_DRIVER_RESTORE = config.get('SQL_RESTORE', 'ODBC_DRIVER_RESTORE')
     except Exception as e:
-        messagebox.showerror("Erro Config", f"{e}", parent=root_para_aviso); sys.exit()
+        print(f"Erro Config: {e}")
 
 class ConfigWindow(tk.Toplevel):
-    def __init__(self, parent):
+    def __init__(self, parent, is_first_run=False):
         super().__init__(parent)
-        self.title("Configuração de Caminhos")
-        self.geometry("700x320")
+        self.title("Bem-vindo! Setup Inicial" if is_first_run else "Configuração de Caminhos")
+        self.geometry("750x380")
         self.resizable(False, False)
         self.salvo = False 
         self.transient(parent); self.grab_set()
 
         self.var_sistema = tk.StringVar()
         self.var_versoes = tk.StringVar()
+        self.var_backup = tk.StringVar()
         self.var_ini = tk.StringVar()
         self.var_7zip = tk.StringVar()
 
@@ -120,18 +137,22 @@ class ConfigWindow(tk.Toplevel):
         main_frame = ttk.Frame(self, padding=20)
         main_frame.pack(fill=BOTH, expand=YES)
         
-        bstrap.Label(main_frame, text="Corrija os caminhos:", font=("bold", 12), bootstyle="danger").pack(pady=(0, 15))
+        if is_first_run:
+            bstrap.Label(main_frame, text="Primeira execução! Confirme os diretórios de trabalho:", font=("bold", 12), bootstyle="success").pack(pady=(0, 15))
+        else:
+            bstrap.Label(main_frame, text="Corrija os caminhos:", font=("bold", 12), bootstyle="danger").pack(pady=(0, 15))
 
         self.criar_campo(main_frame, "Pasta do Sistema", self.var_sistema, True)
         self.criar_campo(main_frame, "Pasta de Versões", self.var_versoes, True)
+        self.criar_campo(main_frame, "Pasta de Backups", self.var_backup, True)
         self.criar_campo(main_frame, "Arquivo .ini", self.var_ini, False)
         self.criar_campo(main_frame, "Executável 7-Zip", self.var_7zip, False)
 
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(fill=X, pady=(20, 0))
-        
-        bstrap.Button(btn_frame, text="Salvar", command=self.salvar, bootstyle="success").pack(side=RIGHT, padx=5)
-        bstrap.Button(btn_frame, text="Cancelar", command=self.destroy, bootstyle="secondary").pack(side=RIGHT)
+        bstrap.Button(btn_frame, text="Salvar e Continuar", command=self.salvar, bootstyle="success").pack(side=RIGHT, padx=5)
+        if not is_first_run:
+            bstrap.Button(btn_frame, text="Cancelar", command=self.destroy, bootstyle="secondary").pack(side=RIGHT)
 
     def criar_campo(self, parent, label, var, is_dir):
         f = ttk.Frame(parent)
@@ -151,6 +172,7 @@ class ConfigWindow(tk.Toplevel):
             c.read(CONFIG_FILE_NAME, encoding='utf-8')
             self.var_sistema.set(c.get('CAMINHOS', 'PASTA_DO_SISTEMA', fallback=''))
             self.var_versoes.set(c.get('CAMINHOS', 'PASTA_DAS_VERSOES', fallback=''))
+            self.var_backup.set(c.get('CAMINHOS', 'PASTA_DE_BACKUP', fallback=''))
             self.var_ini.set(c.get('CAMINHOS', 'CAMINHO_DO_INI', fallback=''))
             self.var_7zip.set(c.get('CAMINHOS', 'CAMINHO_DO_7ZIP_EXE', fallback=''))
         except: pass
@@ -159,8 +181,10 @@ class ConfigWindow(tk.Toplevel):
         try:
             config = configparser.ConfigParser()
             config.read(CONFIG_FILE_NAME, encoding='utf-8')
+            if not config.has_section('CAMINHOS'): config.add_section('CAMINHOS')
             config.set('CAMINHOS', 'PASTA_DO_SISTEMA', self.var_sistema.get())
             config.set('CAMINHOS', 'PASTA_DAS_VERSOES', self.var_versoes.get())
+            config.set('CAMINHOS', 'PASTA_DE_BACKUP', self.var_backup.get())
             config.set('CAMINHOS', 'CAMINHO_DO_INI', self.var_ini.get())
             config.set('CAMINHOS', 'CAMINHO_DO_7ZIP_EXE', self.var_7zip.get())
             with open(CONFIG_FILE_NAME, 'w', encoding='utf-8') as f: config.write(f)
@@ -169,27 +193,31 @@ class ConfigWindow(tk.Toplevel):
             messagebox.showerror("Erro", f"{e}", parent=self)
 
 # =============================================================================
-# APLICAÇÃO PRINCIPAL (PRETO & VERMELHO)
+# APLICAÇÃO PRINCIPAL
 # =============================================================================
 class GerenciadorMaxApp(bstrap.Window):
     def __init__(self):
         super().__init__(themename="cyborg")
         self.title("Gerenciador Max (Black & Red)")
         self.geometry("900x780")
-        
-        # Oculta a janela durante o carregamento inicial
         self.withdraw() 
         self.msg_queue = queue.Queue()
 
     def iniciar_interface(self):
         self.caminho_backup = CAMINHO_BASE_MAX_BACKUP 
         self.create_layout()
-        self.load_backups()
-        self.popular_versoes()
-        self.carregar_banco_atual()
         self.process_queue()
-        # Mostra a janela pronta
-        self.deiconify()
+        self.deiconify() 
+        
+        # Inicia carregamento em Background
+        threading.Thread(target=self.carregamento_assincrono, daemon=True).start()
+
+    def carregamento_assincrono(self):
+        self.after(0, lambda: self.status.config(text="A carregar base de dados e ficheiros locais..."))
+        self.popular_versoes()
+        self.load_backups()
+        self.carregar_banco_atual_sql()
+        self.after(0, lambda: self.status.config(text="Pronto."))
 
     def create_layout(self):
         main = bstrap.Frame(self, padding=10)
@@ -213,20 +241,19 @@ class GerenciadorMaxApp(bstrap.Window):
         self.setup_tools(tab_tools)
         self.setup_config(tab_config)
 
-        self.status = bstrap.Label(self, text="Pronto.", relief=FLAT, anchor=W, padding=8, bootstyle="secondary")
+        self.status = bstrap.Label(self, text="A inicializar...", relief=FLAT, anchor=W, padding=8, bootstyle="secondary")
         self.status.pack(side=BOTTOM, fill=X)
 
     # --- ABA 1: LAUNCHER ---
     def setup_launcher(self, parent):
         bstrap.Label(parent, text="Launcher Maxdata", font=("bold", 20), bootstyle="danger").pack(pady=5)
-
-        db_frame = bstrap.Labelframe(parent, text=" Banco de Dados ", bootstyle="danger", padding=15)
+        db_frame = bstrap.Labelframe(parent, text=" Base de Dados ", bootstyle="danger", padding=15)
         db_frame.pack(fill=X, pady=10)
 
         f1 = bstrap.Frame(db_frame)
         f1.pack(fill=X, pady=5)
         bstrap.Label(f1, text="Banco Atual (INI):", bootstyle="secondary").pack(side=LEFT)
-        self.lbl_db_atual = bstrap.Label(f1, text="...", font=("bold"), bootstyle="danger")
+        self.lbl_db_atual = bstrap.Label(f1, text="A carregar...", font=("bold"), bootstyle="danger")
         self.lbl_db_atual.pack(side=LEFT, padx=5)
         
         bstrap.Label(f1, text="| Versão:", bootstyle="secondary").pack(side=LEFT, padx=(15, 5))
@@ -239,8 +266,7 @@ class GerenciadorMaxApp(bstrap.Window):
         self.combo_db = bstrap.Combobox(f2, state="readonly", bootstyle="danger")
         self.combo_db.pack(side=LEFT, fill=X, expand=YES, padx=5)
         self.combo_db.bind("<<ComboboxSelected>>", self.preview_version)
-        
-        bstrap.Button(f2, text="Salvar", command=self.mudar_banco, bootstyle="danger-outline").pack(side=LEFT)
+        bstrap.Button(f2, text="Guardar", command=self.mudar_banco, bootstyle="danger-outline").pack(side=LEFT)
 
         v_frame = bstrap.Labelframe(parent, text=" Versões Disponíveis ", bootstyle="danger", padding=15)
         v_frame.pack(fill=BOTH, expand=YES, pady=10)
@@ -262,8 +288,7 @@ class GerenciadorMaxApp(bstrap.Window):
 
         bts = bstrap.Frame(parent)
         bts.pack(fill=X)
-        
-        bstrap.Button(bts, text="🔄 Recarregar", command=self.popular_versoes, bootstyle="info-outline").pack(side=LEFT)
+        bstrap.Button(bts, text="🔄 Recarregar", command=lambda: threading.Thread(target=self.popular_versoes, daemon=True).start(), bootstyle="info-outline").pack(side=LEFT)
         bstrap.Button(bts, text="▶️ EXECUTAR SISTEMA", command=self.lancar_erp, bootstyle="success-outline").pack(side=RIGHT, padx=5)
         bstrap.Button(bts, text="⬇️ ATUALIZAR VERSÃO", command=self.lancar_atualizacao, bootstyle="danger").pack(side=RIGHT)
 
@@ -271,7 +296,6 @@ class GerenciadorMaxApp(bstrap.Window):
     def setup_restore(self, parent):
         f1 = bstrap.Labelframe(parent, text=" 1. Selecione o Backup ", bootstyle="danger", padding=10)
         f1.pack(fill=BOTH, expand=YES)
-        
         f_busca = bstrap.Frame(f1)
         f_busca.pack(fill=X, pady=(0, 5))
         bstrap.Label(f_busca, text="🔍 Buscar:").pack(side=LEFT)
@@ -286,7 +310,7 @@ class GerenciadorMaxApp(bstrap.Window):
         self.lb_backups.config(yscrollcommand=sb.set)
         sb.pack(side=RIGHT, fill=Y)
         self.lb_backups.pack(side=LEFT, fill=BOTH, expand=YES)
-        bstrap.Button(f1, text="🔄 Atualizar Lista", command=self.load_backups, bootstyle="link-danger").pack(fill=X)
+        bstrap.Button(f1, text="🔄 Atualizar Lista", command=lambda: threading.Thread(target=self.load_backups, daemon=True).start(), bootstyle="link-danger").pack(fill=X)
 
         f2 = bstrap.Labelframe(parent, text=" 2. Nome do Novo Banco ", bootstyle="danger", padding=10)
         f2.pack(fill=X, pady=10)
@@ -305,11 +329,10 @@ class GerenciadorMaxApp(bstrap.Window):
         self.log_txt = scrolledtext.ScrolledText(f3, height=8, state='disabled', font=("Consolas", 9), bg="#111", fg="#0f0")
         self.log_txt.pack(fill=BOTH, expand=YES)
 
-    # --- ABA 3: TOOLS ---
+    # --- ABA 3: TOOLS (COM MULTI-SELEÇÃO) ---
     def setup_tools(self, parent):
-        bstrap.Label(parent, text="Gerenciamento de Bancos", font=("bold", 14), bootstyle="danger").pack(pady=10)
-        
-        flist = bstrap.Labelframe(parent, text=" Bancos SQL ", bootstyle="danger", padding=10)
+        bstrap.Label(parent, text="Gestão de Bases de Dados", font=("bold", 14), bootstyle="danger").pack(pady=10)
+        flist = bstrap.Labelframe(parent, text=" Bases SQL (Use Shift/Ctrl para selecionar várias) ", bootstyle="danger", padding=10)
         flist.pack(fill=BOTH, expand=YES)
         
         f_busca = bstrap.Frame(flist)
@@ -319,8 +342,8 @@ class GerenciadorMaxApp(bstrap.Window):
         self.var_busca_banco.trace("w", self.filtrar_bancos)
         bstrap.Entry(f_busca, textvariable=self.var_busca_banco, bootstyle="danger").pack(side=LEFT, fill=X, expand=YES, padx=5)
 
-        self.lb_tools = ttk.Treeview(flist, height=10, bootstyle="danger", columns=("banco"), show="headings")
-        self.lb_tools.heading("banco", text="Bancos de Dados")
+        self.lb_tools = ttk.Treeview(flist, height=10, bootstyle="danger", columns=("banco"), show="headings", selectmode="extended")
+        self.lb_tools.heading("banco", text="Bases de Dados")
         self.lb_tools.column("banco", width=300, anchor=tk.W)
         sb = bstrap.Scrollbar(flist, command=self.lb_tools.yview, bootstyle="danger-round")
         self.lb_tools.config(yscrollcommand=sb.set)
@@ -330,33 +353,27 @@ class GerenciadorMaxApp(bstrap.Window):
         fbtn = bstrap.Frame(flist)
         fbtn.pack(side=RIGHT, fill=Y, padx=10)
         
-        bstrap.Button(fbtn, text="🔄 Atualizar", command=self.atualizar_tools, bootstyle="secondary-outline").pack(fill=X, pady=5)
-        bstrap.Button(fbtn, text="🗑️ EXCLUIR (DROP)", command=self.drop_database, bootstyle="danger").pack(fill=X, pady=20)
+        bstrap.Button(fbtn, text="🔄 Atualizar", command=lambda: threading.Thread(target=self.carregar_banco_atual_sql, daemon=True).start(), bootstyle="secondary-outline").pack(fill=X, pady=5)
+        bstrap.Button(fbtn, text="🗑️ ELIMINAR (DROP)", command=self.drop_database, bootstyle="danger").pack(fill=X, pady=20)
 
     # --- ABA 4: CONFIGURAÇÕES ---
     def setup_config(self, parent):
         scroll_canvas = bstrap.Canvas(parent, highlightthickness=0)
         scrollbar = bstrap.Scrollbar(parent, orient="vertical", command=scroll_canvas.yview)
         scroll_frame = bstrap.Frame(scroll_canvas)
-        
         scroll_frame.bind("<Configure>", lambda e: scroll_canvas.configure(scrollregion=scroll_canvas.bbox("all")))
         scroll_canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
         scroll_canvas.configure(yscrollcommand=scrollbar.set)
-        
         scroll_canvas.pack(side=LEFT, fill=BOTH, expand=YES)
         scrollbar.pack(side=RIGHT, fill=Y)
-        
         bstrap.Label(scroll_frame, text="Configurações do Sistema", font=("bold", 14), bootstyle="danger").pack(pady=10)
         
         self.cfg_vars = {}
-        
         def add_section(title, keys, ini_section):
             f = bstrap.Labelframe(scroll_frame, text=f" {title} ", bootstyle="danger", padding=10)
             f.pack(fill=X, pady=5, padx=5)
-            
             c = configparser.ConfigParser()
             c.read(CONFIG_FILE_NAME, encoding='utf-8')
-            
             for key in keys:
                 row = bstrap.Frame(f)
                 row.pack(fill=X, pady=2)
@@ -365,13 +382,12 @@ class GerenciadorMaxApp(bstrap.Window):
                 self.cfg_vars[(ini_section, key)] = var
                 bstrap.Entry(row, textvariable=var, bootstyle="danger").pack(side=LEFT, fill=X, expand=YES)
                 
-        add_section("Caminhos", ["PASTA_DO_SISTEMA", "PASTA_DAS_VERSOES", "CAMINHO_DO_INI", "CAMINHO_DO_7ZIP_EXE"], "CAMINHOS")
+        add_section("Caminhos", ["PASTA_DO_SISTEMA", "PASTA_DAS_VERSOES", "PASTA_DE_BACKUP", "CAMINHO_DO_INI", "CAMINHO_DO_7ZIP_EXE"], "CAMINHOS")
         add_section("Executáveis", ["NOME_EXE_CLIENTE", "NOME_EXE_ATUALIZADOR"], "EXECUTAVEIS")
         add_section("SQL Laudo", ["SQL_DRIVER_LISTA", "SQL_SERVER_INSTANCE"], "SQL_LAUDO")
         add_section("SQL Restore", ["SERVIDOR", "USUARIO", "SENHA", "ODBC_DRIVER_RESTORE"], "SQL_RESTORE")
         add_section("Config INI MAX", ["INI_SECTION", "INI_KEY"], "CONFIG_INI_MAX")
-        
-        bstrap.Button(scroll_frame, text="💾 Salvar Configurações", command=self.salvar_config_aba, bootstyle="success").pack(pady=20)
+        bstrap.Button(scroll_frame, text="💾 Guardar Configurações", command=self.salvar_config_aba, bootstyle="success").pack(pady=20)
 
     def salvar_config_aba(self):
         try:
@@ -381,17 +397,17 @@ class GerenciadorMaxApp(bstrap.Window):
                 if not c.has_section(section): c.add_section(section)
                 c.set(section, key, var.get())
             with open(CONFIG_FILE_NAME, 'w', encoding='utf-8') as f: c.write(f)
-            carregar_ou_criar_configuracoes(root_para_aviso=self)
+            carregar_ou_criar_configuracoes()
             validar_caminhos()
             self.caminho_backup = CAMINHO_BASE_MAX_BACKUP
-            messagebox.showinfo("Sucesso", "Configurações salvas com sucesso!")
-            self.popular_versoes()
-            self.load_backups()
-            self.carregar_banco_atual()
+            messagebox.showinfo("Sucesso", "Configurações guardadas!")
+            threading.Thread(target=self.carregamento_assincrono, daemon=True).start()
         except Exception as e:
-            messagebox.showerror("Erro", f"Erro ao salvar: {e}")
+            messagebox.showerror("Erro", f"Erro ao guardar: {e}")
 
-    # --- LÓGICA DE FILTROS ---
+    # =========================================================================
+    # LÓGICA E FILTROS DE INTERFACE
+    # =========================================================================
     def filtrar_versoes(self, *args):
         busca = self.var_busca_versao.get().lower()
         for i in self.lb_versoes.get_children(): self.lb_versoes.delete(i)
@@ -410,50 +426,45 @@ class GerenciadorMaxApp(bstrap.Window):
         for d in getattr(self, '_all_dbs', []):
             if busca in d.lower(): self.lb_tools.insert("", tk.END, values=(d,))
 
-    # =========================================================================
-    # LÓGICA DO SISTEMA
-    # =========================================================================
+    def atualizar_ui_sql(self, bancos, db_atual, versao):
+        self.lbl_db_atual.config(text=db_atual)
+        self.lbl_versao_sql.config(text=versao)
+        self.combo_db['values'] = bancos
+        if db_atual in bancos: self.combo_db.set(db_atual)
+        self._all_dbs = bancos
+        self.filtrar_bancos()
 
     def get_versao(self, db):
-        if not db or "Nenhum" in db: return "---"
+        if not db or "ERRO" in db or "Nenhum" in db: return "---"
         conn_str = f'DRIVER={SQL_DRIVER_LISTA};SERVER={SQL_SERVER_INSTANCE};DATABASE={db};Trusted_Connection=yes;'
         try:
-            with pyodbc.connect(conn_str, timeout=2) as conn:
+            with pyodbc.connect(conn_str, timeout=1) as conn:
                 cursor = conn.cursor()
                 cursor.execute(SQL_QUERY_VERSAO)
                 row = cursor.fetchone()
                 return str(row[0]) if row else "N/A"
         except: return "---"
 
-    def carregar_banco_atual(self):
+    def carregar_banco_atual_sql(self):
         try:
             c = configparser.ConfigParser()
             c.read(CAMINHO_DO_INI)
             atual = c.get(INI_SECTION, INI_KEY)
-        except: atual = "ERRO"
+        except: atual = "ERRO LER INI"
         
-        if "ERRO" in atual:
-            self.lbl_db_atual.config(text="Erro Ler INI")
-        else:
-            self.lbl_db_atual.config(text=atual)
-            self.lbl_versao_sql.config(text=self.get_versao(atual))
-        
+        versao = self.get_versao(atual)
         bancos = self.listar_sql_dbs()
-        self.combo_db['values'] = bancos
-        if atual in bancos: self.combo_db.set(atual)
-        self._all_dbs = bancos
-        self.filtrar_bancos()
+        self.after(0, lambda: self.atualizar_ui_sql(bancos, atual, versao))
 
     def preview_version(self, e):
         db = self.combo_db.get()
-        v = self.get_versao(db)
-        self.status.config(text=f"Banco selecionado: {db} (Versão: {v})")
+        threading.Thread(target=lambda: self.after(0, lambda v=self.get_versao(db): self.status.config(text=f"Banco selecionado: {db} (Versão: {v})")), daemon=True).start()
 
     def listar_sql_dbs(self):
         conn_str = f'DRIVER={SQL_DRIVER_LISTA};SERVER={SQL_SERVER_INSTANCE};DATABASE=master;Trusted_Connection=yes;'
         try:
             lst = []
-            with pyodbc.connect(conn_str) as conn:
+            with pyodbc.connect(conn_str, timeout=2) as conn:
                 res = conn.cursor().execute("SELECT name FROM sys.databases WHERE name NOT IN ('master','tempdb','model','msdb')")
                 for r in res: lst.append(r.name)
             return sorted(lst)
@@ -469,13 +480,27 @@ class GerenciadorMaxApp(bstrap.Window):
             c.set(INI_SECTION, INI_KEY, novo)
             with open(CAMINHO_DO_INI, 'w') as f: c.write(f)
             messagebox.showinfo("Sucesso", f"Alterado para: {novo}")
-            self.carregar_banco_atual()
+            threading.Thread(target=self.carregar_banco_atual_sql, daemon=True).start()
         except Exception as e: messagebox.showerror("Erro", f"{e}")
 
     def popular_versoes(self):
         try:
-            self._all_versoes = sorted([x for x in os.listdir(PASTA_DAS_VERSOES) if x.lower().endswith('.rar')], reverse=True)
-            self.filtrar_versoes()
+            if os.path.exists(PASTA_DAS_VERSOES):
+                versoes = [e.name for e in os.scandir(PASTA_DAS_VERSOES) if e.is_file() and e.name.lower().endswith('.rar')]
+                self._all_versoes = sorted(versoes, reverse=True)
+                self.after(0, self.filtrar_versoes)
+        except: pass
+
+    def load_backups(self):
+        try:
+            backups = []
+            if os.path.exists(self.caminho_backup):
+                for e in os.scandir(self.caminho_backup):
+                    if e.is_file() and e.name.upper().endswith((".MAX", ".BAK", ".ZIP", ".RAR")):
+                        backups.append((e.name, e.stat().st_mtime))
+                backups.sort(key=lambda x: x[1], reverse=True)
+                self._all_backups = [b[0] for b in backups]
+                self.after(0, self.filtrar_backups)
         except: pass
 
     def get_exe_versao(self, caminho_exe):
@@ -492,32 +517,21 @@ class GerenciadorMaxApp(bstrap.Window):
     def lancar_erp(self):
         try:
             db_atual = self.lbl_db_atual.cget("text")
-            db_versao = self.get_versao(db_atual)
+            db_versao = self.lbl_versao_sql.cget("text")
             exe_versao = self.get_exe_versao(CAMINHO_DO_ERP_CLIENTE)
 
             if db_versao and exe_versao and db_versao != "---" and db_versao != "N/A" and exe_versao != db_versao:
-                # Procura a versão nas pastas
-                arquivo_rar = None
-                for v in getattr(self, '_all_versoes', []):
-                    if db_versao in v:
-                        arquivo_rar = v
-                        break
-                
+                arquivo_rar = next((v for v in getattr(self, '_all_versoes', []) if db_versao in v), None)
                 if arquivo_rar:
                     if messagebox.askyesno("Atualização Necessária", 
-                        f"A versão do banco de dados ({db_versao}) é diferente da versão do executável atual ({exe_versao}).\n\n"
-                        f"Deseja atualizar automaticamente usando a versão '{arquivo_rar}' antes de abrir o sistema?"):
-                        # Extrai e abre o atualizador
-                        import threading
+                        f"Versão Base de Dados: {db_versao} | Versão Executável: {exe_versao}.\n\nAtualizar para '{arquivo_rar}'?"):
                         threading.Thread(target=self.thread_extrair, args=(arquivo_rar,), daemon=True).start()
                         return
                 else:
-                    messagebox.showwarning("Aviso de Versão", 
-                        f"A versão do banco ({db_versao}) difere do executável ({exe_versao}), mas o arquivo .RAR correspondente não foi encontrado na pasta de versões.\n\nIniciando sistema mesmo assim...")
+                    messagebox.showwarning("Aviso de Versão", "As versões da base de dados e do executável são diferentes e o ficheiro de extração não foi encontrado.\nA ignorar...")
             
             subprocess.Popen([CAMINHO_DO_ERP_CLIENTE], cwd=PASTA_DO_SISTEMA)
-        except Exception as e:
-            messagebox.showerror("Erro", f"Erro ao executar: {e}")
+        except Exception as e: messagebox.showerror("Erro", f"Erro: {e}")
 
     def lancar_atualizacao(self):
         sel = self.lb_versoes.selection()
@@ -528,28 +542,18 @@ class GerenciadorMaxApp(bstrap.Window):
 
     def thread_extrair(self, arq):
         try:
-            self.status.config(text="Extraindo...")
+            self.after(0, lambda: self.status.config(text="A extrair..."))
             cmd = [CAMINHO_DO_7ZIP_EXE, 'x', os.path.join(PASTA_DAS_VERSOES, arq), f'-o{PASTA_DO_SISTEMA}', '-y']
             subprocess.run(cmd, check=True, creationflags=subprocess.CREATE_NO_WINDOW)
             self.after(0, self.lancar_atualizador_callback)
         except Exception as e:
-            # FIX CRÍTICO: Converte o erro em string e passa como argumento padrão
-            # Isso evita que o Python "perca" a variável 'e' quando o except termina
-            erro_msg = str(e)
-            self.after(0, lambda m=erro_msg: messagebox.showerror("Erro Extração", m))
+            self.after(0, lambda m=str(e): messagebox.showerror("Erro Extração", m))
 
     def lancar_atualizador_callback(self):
         try:
             subprocess.Popen([CAMINHO_DO_MAX_ATUALIZA], cwd=PASTA_DO_SISTEMA)
             self.status.config(text="Atualizador Aberto.")
         except Exception as e: messagebox.showerror("Erro", f"{e}")
-
-    def load_backups(self):
-        try:
-            fs = [f for f in os.listdir(self.caminho_backup) if f.upper().endswith((".MAX",".BAK",".ZIP",".RAR"))]
-            self._all_backups = sorted(fs, key=lambda x: os.path.getmtime(os.path.join(self.caminho_backup, x)), reverse=True)
-            self.filtrar_backups()
-        except: pass
 
     def iniciar_restore_thread(self):
         try: 
@@ -562,7 +566,6 @@ class GerenciadorMaxApp(bstrap.Window):
         self.btn_restore.config(state='disabled')
         self.progress.start()
         self.log_txt.config(state='normal'); self.log_txt.delete('1.0', END); self.log_txt.config(state='disabled')
-        
         threading.Thread(target=self.restore_logic, args=(fname, new_db), daemon=True).start()
 
     def restore_logic(self, fname, dbname):
@@ -573,20 +576,14 @@ class GerenciadorMaxApp(bstrap.Window):
             final = origem
 
             if fname.lower().endswith(('.zip', '.rar')):
-                self.msg_queue.put("Extraindo arquivo...")
+                self.msg_queue.put("A extrair ficheiro...")
                 tmp_dir = os.path.join(self.caminho_backup, f"_tmp_{int(time.time())}")
                 os.makedirs(tmp_dir, exist_ok=True)
-                
                 cmd = [CAMINHO_DO_7ZIP_EXE, 'x', origem, f'-o{tmp_dir}', '-y']
                 subprocess.run(cmd, check=True, creationflags=subprocess.CREATE_NO_WINDOW)
                 
-                encontrado = None
-                for root, dirs, files in os.walk(tmp_dir):
-                    for f in files:
-                        if f.upper().endswith(('.MAX', '.BAK')):
-                            encontrado = os.path.join(root, f)
-                            break
-                if not encontrado: raise Exception("Arquivo .MAX/.BAK não encontrado.")
+                encontrado = next((os.path.join(root, f) for root, _, files in os.walk(tmp_dir) for f in files if f.upper().endswith(('.MAX', '.BAK'))), None)
+                if not encontrado: raise Exception("Ficheiro .MAX/.BAK não encontrado.")
                 final = encontrado
                 self.msg_queue.put(f"Encontrado: {os.path.basename(final)}")
 
@@ -595,29 +592,24 @@ class GerenciadorMaxApp(bstrap.Window):
                 d = os.path.join(PASTA_DO_SISTEMA, f"dados{i}")
                 if not os.path.exists(d): os.makedirs(d); break
                 i += 1
-            
             mdf = os.path.join(d, f"{dbname}.mdf")
             ldf = os.path.join(d, f"{dbname}_log.ldf")
 
             conn_str = f"DRIVER={ODBC_DRIVER_RESTORE};SERVER={SERVIDOR};UID={USUARIO};PWD={SENHA};DATABASE=master"
             conn = pyodbc.connect(conn_str, autocommit=True)
             cur = conn.cursor()
-            
             cur.execute("RESTORE FILELISTONLY FROM DISK = ?", final)
-            rows = cur.fetchall()
             ld, ll = None, None
-            for r in rows:
+            for r in cur.fetchall():
                 if r.Type == 'D': ld = r.LogicalName
                 if r.Type == 'L': ll = r.LogicalName
             
-            self.msg_queue.put("Restaurando SQL...")
-            sql = f"""RESTORE DATABASE [{dbname}] FROM DISK='{final}'
-                      WITH MOVE '{ld}' TO '{mdf}', MOVE '{ll}' TO '{ldf}', REPLACE"""
+            self.msg_queue.put("A restaurar SQL...")
+            sql = f"RESTORE DATABASE [{dbname}] FROM DISK='{final}' WITH MOVE '{ld}' TO '{mdf}', MOVE '{ll}' TO '{ldf}', REPLACE"
             cur.execute(sql)
             while cur.nextset(): pass
             conn.close()
             self.msg_queue.put("__DONE__")
-
         except Exception as e:
             self.msg_queue.put(f"ERRO: {e}")
             self.msg_queue.put("__ERROR__")
@@ -634,11 +626,11 @@ class GerenciadorMaxApp(bstrap.Window):
                     self.progress.stop()
                     self.btn_restore.config(state='normal')
                     messagebox.showinfo("Sucesso", "Restore Concluído!")
-                    self.carregar_banco_atual()
+                    threading.Thread(target=self.carregar_banco_atual_sql, daemon=True).start()
                 elif msg == "__ERROR__":
                     self.progress.stop()
                     self.btn_restore.config(state='normal')
-                    messagebox.showerror("Erro", "Falha. Veja o log.")
+                    messagebox.showerror("Erro", "Falhou. Veja o log.")
                 else:
                     self.log_txt.config(state='normal')
                     self.log_txt.insert(END, msg + "\n")
@@ -647,54 +639,82 @@ class GerenciadorMaxApp(bstrap.Window):
         except: pass
         self.after(100, self.process_queue)
 
-    def atualizar_tools(self):
-        self._all_dbs = self.listar_sql_dbs()
-        self.filtrar_bancos()
-
     def drop_database(self):
         sel = self.lb_tools.selection()
         if not sel: return
-        db = self.lb_tools.item(sel[0], "values")[0]
         
-        if db == self.lbl_db_atual.cget("text"):
-            messagebox.showerror("Bloqueado", "Não apague o banco definido no INI.")
-            return
+        bancos_alvo = [self.lb_tools.item(i, "values")[0] for i in sel]
+        db_atual = self.lbl_db_atual.cget("text")
+        
+        if db_atual in bancos_alvo:
+            bancos_alvo.remove(db_atual)
+            messagebox.showwarning("Proteção", f"O banco atual ({db_atual}) não pode ser eliminado. Foi removido da sua lista de exclusão.")
+            
+        if not bancos_alvo: return
 
-        confirmacao = simpledialog.askstring("PERIGO", f"DELETAR '{db}' permanentemente?\n\nDigite o nome exato do banco '{db}' para confirmar:")
-        if confirmacao == db:
-            try:
-                conn_str = f"DRIVER={ODBC_DRIVER_RESTORE};SERVER={SERVIDOR};UID={USUARIO};PWD={SENHA};DATABASE=master"
-                with pyodbc.connect(conn_str, autocommit=True) as conn:
-                    conn.cursor().execute(f"ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{db}]")
-                messagebox.showinfo("Sucesso", "Banco Apagado.")
-                self.carregar_banco_atual()
-                self.atualizar_tools()
-            except Exception as e: messagebox.showerror("Erro", f"{e}")
+        if len(bancos_alvo) == 1:
+            msg = f"ELIMINAR '{bancos_alvo[0]}' permanentemente?\n\nEscreva EXCLUIR para confirmar:"
         else:
-            if confirmacao is not None:
-                messagebox.showwarning("Cancelado", "Nome digitado não confere. Operação cancelada.")
+            lista_preview = ", ".join(bancos_alvo[:5]) + ("..." if len(bancos_alvo) > 5 else "")
+            msg = f"ELIMINAR {len(bancos_alvo)} bases de dados permanentemente?\n\n({lista_preview})\n\nEscreva EXCLUIR para confirmar:"
+
+        confirmacao = simpledialog.askstring("PERIGO", msg)
+        
+        if confirmacao == "EXCLUIR":
+            threading.Thread(target=self.thread_drop_bancos, args=(bancos_alvo,), daemon=True).start()
+        elif confirmacao is not None:
+            messagebox.showwarning("Cancelado", "Palavra de confirmação inválida.")
+
+    def thread_drop_bancos(self, bancos):
+        try:
+            self.after(0, lambda: self.status.config(text=f"A eliminar {len(bancos)} banco(s)..."))
+            conn_str = f"DRIVER={ODBC_DRIVER_RESTORE};SERVER={SERVIDOR};UID={USUARIO};PWD={SENHA};DATABASE=master"
+            with pyodbc.connect(conn_str, autocommit=True) as conn:
+                cursor = conn.cursor()
+                for db in bancos:
+                    cursor.execute(f"ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE")
+                    cursor.execute(f"DROP DATABASE [{db}]")
+            
+            self.after(0, lambda: messagebox.showinfo("Sucesso", "Bases de dados eliminadas com sucesso!"))
+            self.carregar_banco_atual_sql()
+            self.after(0, lambda: self.status.config(text="Pronto."))
+        except Exception as e:
+            self.after(0, lambda err=str(e): messagebox.showerror("Erro", err))
 
 def validar_caminhos():
-    global CAMINHO_DO_ERP_CLIENTE, CAMINHO_DO_MAX_ATUALIZA, CAMINHO_BASE_MAX_BACKUP
+    global CAMINHO_DO_ERP_CLIENTE, CAMINHO_DO_MAX_ATUALIZA
     CAMINHO_DO_ERP_CLIENTE = os.path.join(PASTA_DO_SISTEMA, NOME_EXE_CLIENTE)
     CAMINHO_DO_MAX_ATUALIZA = os.path.join(PASTA_DO_SISTEMA, NOME_EXE_ATUALIZADOR)
-    CAMINHO_BASE_MAX_BACKUP = os.path.join(PASTA_DO_SISTEMA, 'backup')
     
     erros = []
     if not os.path.isdir(PASTA_DO_SISTEMA): erros.append(f"Pasta Sistema: {PASTA_DO_SISTEMA}")
     if not os.path.isdir(PASTA_DAS_VERSOES): erros.append(f"Pasta Versões: {PASTA_DAS_VERSOES}")
+    if not os.path.isdir(CAMINHO_BASE_MAX_BACKUP): erros.append(f"Pasta Backups: {CAMINHO_BASE_MAX_BACKUP}")
+    if not os.path.exists(CAMINHO_DO_INI): erros.append(f"Ficheiro INI: {CAMINHO_DO_INI}")
     if not os.path.exists(CAMINHO_DO_7ZIP_EXE): erros.append(f"7-Zip: {CAMINHO_DO_7ZIP_EXE}")
     return erros
 
 if __name__ == "__main__":
+    carregar_ou_criar_configuracoes()
     app = GerenciadorMaxApp()
+    
+    # SETUP INICIAL: Abre a tela de configuração imediatamente na primeira execução
+    if PRIMEIRA_EXECUCAO:
+        cw = ConfigWindow(app, is_first_run=True)
+        app.wait_window(cw)
+        if not cw.salvo: 
+            sys.exit()
+        carregar_ou_criar_configuracoes() 
+        
+    # VERIFICAÇÃO DE ERROS
     while True:
-        carregar_ou_criar_configuracoes(root_para_aviso=app)
         erros = validar_caminhos()
         if not erros: break
         messagebox.showerror("Configuração Necessária", "Caminhos inválidos:\n" + "\n".join(erros), parent=app)
         cw = ConfigWindow(app)
         app.wait_window(cw)
         if not cw.salvo: sys.exit()
+        carregar_ou_criar_configuracoes() 
+        
     app.iniciar_interface()
     app.mainloop()
