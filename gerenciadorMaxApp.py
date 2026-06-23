@@ -33,6 +33,7 @@ CAMINHO_DO_INI = ""
 CAMINHO_DO_7ZIP_EXE = ""
 INI_SECTION = ""
 INI_KEY = ""
+INI_SERVER_KEY = ""
 SERVIDOR = ""
 USUARIO = ""
 SENHA = ""
@@ -52,7 +53,7 @@ def carregar_ou_criar_configuracoes():
     global PASTA_DO_SISTEMA, NOME_EXE_CLIENTE, NOME_EXE_ATUALIZADOR, PASTA_DAS_VERSOES
     global CAMINHO_BASE_MAX_BACKUP, CAMINHO_DO_INI, CAMINHO_DO_7ZIP_EXE, INI_SECTION, INI_KEY
     global SERVIDOR, USUARIO, SENHA, ODBC_DRIVER_RESTORE, SQL_DRIVER_LISTA, SQL_SERVER_INSTANCE
-    global PRIMEIRA_EXECUCAO
+    global PRIMEIRA_EXECUCAO, INI_SERVER_KEY
 
     # Onde o executável está rodando agora?
     BASE_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
@@ -88,7 +89,7 @@ def carregar_ou_criar_configuracoes():
             'NOME_EXE_CLIENTE': 'MAX_manager2.exe',
             'NOME_EXE_ATUALIZADOR': 'MAX_Atualiza.exe'
         }
-        config['CONFIG_INI_MAX'] = {'INI_SECTION': 'CON', 'INI_KEY': 'Initial catalog'}
+        config['CONFIG_INI_MAX'] = {'INI_SECTION': 'CON', 'INI_KEY': 'Initial catalog', 'INI_SERVER_KEY': 'Data Source'}
         config['SQL_LAUDO'] = {'SQL_DRIVER_LISTA': '{ODBC Driver 17 for SQL Server}', 'SQL_SERVER_INSTANCE': 'localhost'}
         config['SQL_RESTORE'] = {'SERVIDOR': 'localhost', 'USUARIO': 'sa', 'SENHA': 'macro01', 'ODBC_DRIVER_RESTORE': '{ODBC Driver 17 for SQL Server}'}
         
@@ -108,6 +109,7 @@ def carregar_ou_criar_configuracoes():
         NOME_EXE_ATUALIZADOR = config.get('EXECUTAVEIS', 'NOME_EXE_ATUALIZADOR')
         INI_SECTION = config.get('CONFIG_INI_MAX', 'INI_SECTION')
         INI_KEY = config.get('CONFIG_INI_MAX', 'INI_KEY')
+        INI_SERVER_KEY = config.get('CONFIG_INI_MAX', 'INI_SERVER_KEY', fallback='Data Source')
         SQL_DRIVER_LISTA = config.get('SQL_LAUDO', 'SQL_DRIVER_LISTA')
         SQL_SERVER_INSTANCE = config.get('SQL_LAUDO', 'SQL_SERVER_INSTANCE')
         SERVIDOR = config.get('SQL_RESTORE', 'SERVIDOR')
@@ -222,6 +224,13 @@ class GerenciadorMaxApp(bstrap.Window):
     def create_layout(self):
         main = bstrap.Frame(self, padding=10)
         main.pack(fill=BOTH, expand=YES)
+
+        top_frame = bstrap.Frame(main, padding=5)
+        top_frame.pack(fill=X, pady=(0, 10))
+        bstrap.Label(top_frame, text="Instância SQL Ativa:", font=("bold", 12), bootstyle="secondary").pack(side=LEFT)
+        self.combo_instancia = bstrap.Combobox(top_frame, state="readonly", bootstyle="danger", width=30)
+        self.combo_instancia.pack(side=LEFT, padx=10)
+        self.combo_instancia.bind("<<ComboboxSelected>>", self.on_instancia_changed)
         
         self.notebook = bstrap.Notebook(main, bootstyle="danger")
         self.notebook.pack(fill=BOTH, expand=YES)
@@ -356,6 +365,41 @@ class GerenciadorMaxApp(bstrap.Window):
         bstrap.Button(fbtn, text="🔄 Atualizar", command=lambda: threading.Thread(target=self.carregar_banco_atual_sql, daemon=True).start(), bootstyle="secondary-outline").pack(fill=X, pady=5)
         bstrap.Button(fbtn, text="🗑️ ELIMINAR (DROP)", command=self.drop_database, bootstyle="danger").pack(fill=X, pady=20)
 
+    def listar_instancias_sql(self):
+        instancias = ["127.0.0.1", "localhost"]
+        try:
+            import winreg
+            registry_key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Microsoft SQL Server\Instance Names\SQL")
+            for i in range(1024):
+                try:
+                    name, value, _ = winreg.EnumValue(registry_key, i)
+                    if name != "MSSQLSERVER":
+                        inst_name = f"localhost\\{name}"
+                        if inst_name not in instancias: instancias.append(inst_name)
+                except OSError:
+                    break
+        except Exception:
+            pass
+        return instancias
+
+    def on_instancia_changed(self, event=None):
+        instancia = self.combo_instancia.get()
+        global SQL_SERVER_INSTANCE, SERVIDOR
+        SQL_SERVER_INSTANCE = instancia
+        SERVIDOR = instancia
+        
+        try:
+            c = configparser.ConfigParser()
+            c.read(CAMINHO_DO_INI)
+            if not c.has_section(INI_SECTION): c.add_section(INI_SECTION)
+            c.set(INI_SECTION, INI_SERVER_KEY, instancia)
+            with open(CAMINHO_DO_INI, 'w') as f: c.write(f)
+        except Exception:
+            pass
+
+        self.after(0, lambda: self.status.config(text=f"Instância alterada para: {instancia}. A recarregar bancos..."))
+        threading.Thread(target=self.carregar_banco_atual_sql, daemon=True).start()
+
     # --- ABA 4: CONFIGURAÇÕES ---
     def setup_config(self, parent):
         scroll_canvas = bstrap.Canvas(parent, highlightthickness=0)
@@ -386,7 +430,7 @@ class GerenciadorMaxApp(bstrap.Window):
         add_section("Executáveis", ["NOME_EXE_CLIENTE", "NOME_EXE_ATUALIZADOR"], "EXECUTAVEIS")
         add_section("SQL Laudo", ["SQL_DRIVER_LISTA", "SQL_SERVER_INSTANCE"], "SQL_LAUDO")
         add_section("SQL Restore", ["SERVIDOR", "USUARIO", "SENHA", "ODBC_DRIVER_RESTORE"], "SQL_RESTORE")
-        add_section("Config INI MAX", ["INI_SECTION", "INI_KEY"], "CONFIG_INI_MAX")
+        add_section("Config INI MAX", ["INI_SECTION", "INI_KEY", "INI_SERVER_KEY"], "CONFIG_INI_MAX")
         bstrap.Button(scroll_frame, text="💾 Guardar Configurações", command=self.salvar_config_aba, bootstyle="success").pack(pady=20)
 
     def salvar_config_aba(self):
@@ -450,7 +494,25 @@ class GerenciadorMaxApp(bstrap.Window):
             c = configparser.ConfigParser()
             c.read(CAMINHO_DO_INI)
             atual = c.get(INI_SECTION, INI_KEY)
-        except: atual = "ERRO LER INI"
+            server_atual = c.get(INI_SECTION, INI_SERVER_KEY)
+        except: 
+            atual = "ERRO LER INI"
+            server_atual = None
+            
+        if server_atual:
+            global SQL_SERVER_INSTANCE, SERVIDOR
+            SQL_SERVER_INSTANCE = server_atual
+            SERVIDOR = server_atual
+            if hasattr(self, 'combo_instancia'):
+                vals = list(self.combo_instancia.cget('values')) if self.combo_instancia.cget('values') else self.listar_instancias_sql()
+                if server_atual not in vals: vals.append(server_atual)
+                self.after(0, lambda v=vals: self.combo_instancia.config(values=v))
+                self.after(0, lambda s=server_atual: self.combo_instancia.set(s))
+        else:
+            if hasattr(self, 'combo_instancia') and not self.combo_instancia.get():
+                vals = self.listar_instancias_sql()
+                self.after(0, lambda v=vals: self.combo_instancia.config(values=v))
+                if vals: self.after(0, lambda: self.combo_instancia.set(vals[0]))
         
         versao = self.get_versao(atual)
         bancos = self.listar_sql_dbs()
@@ -478,6 +540,9 @@ class GerenciadorMaxApp(bstrap.Window):
             c.read(CAMINHO_DO_INI)
             if not c.has_section(INI_SECTION): c.add_section(INI_SECTION)
             c.set(INI_SECTION, INI_KEY, novo)
+            if hasattr(self, 'combo_instancia'):
+                inst = self.combo_instancia.get()
+                if inst: c.set(INI_SECTION, INI_SERVER_KEY, inst)
             with open(CAMINHO_DO_INI, 'w') as f: c.write(f)
             messagebox.showinfo("Sucesso", f"Alterado para: {novo}")
             threading.Thread(target=self.carregar_banco_atual_sql, daemon=True).start()
