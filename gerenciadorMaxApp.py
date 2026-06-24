@@ -12,6 +12,12 @@ import subprocess
 import configparser
 import time
 import shutil
+import urllib.request
+import urllib.error
+import base64
+import re
+import urllib.parse
+import xml.etree.ElementTree as ET
 
 try:
     from pywinauto.application import Application
@@ -40,6 +46,11 @@ SENHA = ""
 ODBC_DRIVER_RESTORE = ""
 SQL_DRIVER_LISTA = ""
 SQL_SERVER_INSTANCE = ""
+URL_CLOUD = ""
+USUARIO_CLOUD = ""
+SENHA_CLOUD = ""
+CAMINHO_NUVEM_ATUAL = ""
+CAMINHO_NUVEM_BACKUP = ""
 
 CAMINHO_DO_ERP_CLIENTE = ""
 CAMINHO_DO_MAX_ATUALIZA = ""
@@ -54,6 +65,7 @@ def carregar_ou_criar_configuracoes():
     global CAMINHO_BASE_MAX_BACKUP, CAMINHO_DO_INI, CAMINHO_DO_7ZIP_EXE, INI_SECTION, INI_KEY
     global SERVIDOR, USUARIO, SENHA, ODBC_DRIVER_RESTORE, SQL_DRIVER_LISTA, SQL_SERVER_INSTANCE
     global PRIMEIRA_EXECUCAO, INI_SERVER_KEY
+    global URL_CLOUD, USUARIO_CLOUD, SENHA_CLOUD
 
     # Onde o executável está rodando agora?
     BASE_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
@@ -92,6 +104,7 @@ def carregar_ou_criar_configuracoes():
         config['CONFIG_INI_MAX'] = {'INI_SECTION': 'CON', 'INI_KEY': 'Initial catalog', 'INI_SERVER_KEY': 'Data Source'}
         config['SQL_LAUDO'] = {'SQL_DRIVER_LISTA': '{ODBC Driver 17 for SQL Server}', 'SQL_SERVER_INSTANCE': 'localhost'}
         config['SQL_RESTORE'] = {'SERVIDOR': 'localhost', 'USUARIO': 'sa', 'SENHA': 'macro01', 'ODBC_DRIVER_RESTORE': '{ODBC Driver 17 for SQL Server}'}
+        config['CLOUD'] = {'URL_CLOUD': 'https://cloud.maxdata.com.br', 'USUARIO_CLOUD': '', 'SENHA_CLOUD': ''}
         
         try:
             with open(CONFIG_FILE_NAME, 'w', encoding='utf-8') as f: config.write(f)
@@ -116,6 +129,9 @@ def carregar_ou_criar_configuracoes():
         USUARIO = config.get('SQL_RESTORE', 'USUARIO')
         SENHA = config.get('SQL_RESTORE', 'SENHA')
         ODBC_DRIVER_RESTORE = config.get('SQL_RESTORE', 'ODBC_DRIVER_RESTORE')
+        URL_CLOUD = config.get('CLOUD', 'URL_CLOUD', fallback='https://cloud.maxdata.com.br')
+        USUARIO_CLOUD = config.get('CLOUD', 'USUARIO_CLOUD', fallback='')
+        SENHA_CLOUD = config.get('CLOUD', 'SENHA_CLOUD', fallback='')
     except Exception as e:
         print(f"Erro Config: {e}")
 
@@ -217,6 +233,7 @@ class GerenciadorMaxApp(bstrap.Window):
     def carregamento_assincrono(self):
         self.after(0, lambda: self.status.config(text="A carregar base de dados e ficheiros locais..."))
         self.popular_versoes()
+        self.popular_versoes_nuvem()
         self.load_backups()
         self.carregar_banco_atual_sql()
         self.after(0, lambda: self.status.config(text="Pronto."))
@@ -277,49 +294,114 @@ class GerenciadorMaxApp(bstrap.Window):
         self.combo_db.bind("<<ComboboxSelected>>", self.preview_version)
         bstrap.Button(f2, text="Guardar", command=self.mudar_banco, bootstyle="danger-outline").pack(side=LEFT)
 
-        v_frame = bstrap.Labelframe(parent, text=" Versões Disponíveis ", bootstyle="danger", padding=15)
+        v_frame = bstrap.Labelframe(parent, text=" Gestão de Versões ", bootstyle="danger", padding=15)
         v_frame.pack(fill=BOTH, expand=YES, pady=10)
 
-        f_busca = bstrap.Frame(v_frame)
+        self.nb_versoes = bstrap.Notebook(v_frame, bootstyle="danger")
+        self.nb_versoes.pack(fill=BOTH, expand=YES)
+
+        tab_locais = bstrap.Frame(self.nb_versoes, padding=10)
+        tab_nuvem = bstrap.Frame(self.nb_versoes, padding=10)
+        self.nb_versoes.add(tab_locais, text="💻 Versões Locais")
+        self.nb_versoes.add(tab_nuvem, text="☁️ Nuvem Maxdata")
+
+        # --- TAB LOCAIS ---
+        f_busca = bstrap.Frame(tab_locais)
         f_busca.pack(fill=X, pady=(0, 5))
         bstrap.Label(f_busca, text="🔍 Buscar:").pack(side=LEFT)
         self.var_busca_versao = tk.StringVar()
         self.var_busca_versao.trace("w", self.filtrar_versoes)
         bstrap.Entry(f_busca, textvariable=self.var_busca_versao, bootstyle="danger").pack(side=LEFT, fill=X, expand=YES, padx=5)
 
-        self.lb_versoes = ttk.Treeview(v_frame, height=8, bootstyle="danger", columns=("versao"), show="headings")
-        self.lb_versoes.heading("versao", text="Versões Disponíveis")
+        self.lb_versoes = ttk.Treeview(tab_locais, height=6, bootstyle="danger", columns=("versao"), show="headings")
+        self.lb_versoes.heading("versao", text="Arquivos (.rar) no PC")
         self.lb_versoes.column("versao", width=300, anchor=W)
-        sb = bstrap.Scrollbar(v_frame, command=self.lb_versoes.yview, bootstyle="danger-round")
+        sb = bstrap.Scrollbar(tab_locais, command=self.lb_versoes.yview, bootstyle="danger-round")
         self.lb_versoes.config(yscrollcommand=sb.set)
         sb.pack(side=RIGHT, fill=Y)
         self.lb_versoes.pack(side=LEFT, fill=BOTH, expand=YES)
+        
+        # --- TAB NUVEM ---
+        f_busca_n = bstrap.Frame(tab_nuvem)
+        f_busca_n.pack(fill=X, pady=(0, 5))
+        bstrap.Button(f_busca_n, text="🔄 Conectar/Recarregar", command=lambda: threading.Thread(target=self.popular_versoes_nuvem, daemon=True).start(), bootstyle="danger-outline").pack(side=LEFT)
+        bstrap.Button(f_busca_n, text="⬅️ Voltar Pasta", command=self.voltar_pasta_nuvem, bootstyle="secondary").pack(side=LEFT, padx=5)
+        
+        self.lbl_caminho_nuvem = bstrap.Label(f_busca_n, text="/", bootstyle="secondary")
+        self.lbl_caminho_nuvem.pack(side=LEFT, padx=5)
+
+        self.lb_nuvem = ttk.Treeview(tab_nuvem, height=6, bootstyle="danger", columns=("tipo", "nome"), show="headings")
+        self.lb_nuvem.heading("tipo", text="Tipo")
+        self.lb_nuvem.column("tipo", width=50, stretch=False, anchor=W)
+        self.lb_nuvem.heading("nome", text="Nome (Duplo-clique para abrir pasta)")
+        self.lb_nuvem.column("nome", width=250, anchor=W)
+        self.lb_nuvem.bind("<Double-1>", self.on_nuvem_double_click)
+        
+        sb_n = bstrap.Scrollbar(tab_nuvem, command=self.lb_nuvem.yview, bootstyle="danger-round")
+        self.lb_nuvem.config(yscrollcommand=sb_n.set)
+        sb_n.pack(side=RIGHT, fill=Y)
+        self.lb_nuvem.pack(side=LEFT, fill=BOTH, expand=YES)
+
+        bstrap.Button(tab_nuvem, text="⬇️ BAIXAR ARQUIVO SELECIONADO", command=self.baixar_da_nuvem, bootstyle="danger").pack(side=BOTTOM, fill=X, pady=5)
 
         bts = bstrap.Frame(parent)
         bts.pack(fill=X)
-        bstrap.Button(bts, text="🔄 Recarregar", command=lambda: threading.Thread(target=self.popular_versoes, daemon=True).start(), bootstyle="info-outline").pack(side=LEFT)
+        bstrap.Button(bts, text="🔄 Recarregar Locais", command=lambda: threading.Thread(target=self.popular_versoes, daemon=True).start(), bootstyle="secondary-outline").pack(side=LEFT)
         bstrap.Button(bts, text="▶️ EXECUTAR SISTEMA", command=self.lancar_erp, bootstyle="success-outline").pack(side=RIGHT, padx=5)
-        bstrap.Button(bts, text="⬇️ ATUALIZAR VERSÃO", command=self.lancar_atualizacao, bootstyle="danger").pack(side=RIGHT)
+        bstrap.Button(bts, text="⚡ ATUALIZAR VERSÃO (Extrair)", command=self.lancar_atualizacao, bootstyle="danger").pack(side=RIGHT)
 
     # --- ABA 2: RESTORE ---
     def setup_restore(self, parent):
         f1 = bstrap.Labelframe(parent, text=" 1. Selecione o Backup ", bootstyle="danger", padding=10)
         f1.pack(fill=BOTH, expand=YES)
-        f_busca = bstrap.Frame(f1)
+
+        self.nb_backups = bstrap.Notebook(f1, bootstyle="danger")
+        self.nb_backups.pack(fill=BOTH, expand=YES)
+
+        tab_locais_bkp = bstrap.Frame(self.nb_backups, padding=10)
+        tab_nuvem_bkp = bstrap.Frame(self.nb_backups, padding=10)
+        self.nb_backups.add(tab_locais_bkp, text="💻 Backups Locais")
+        self.nb_backups.add(tab_nuvem_bkp, text="☁️ Nuvem Maxdata")
+
+        # --- TAB LOCAIS BKP ---
+        f_busca = bstrap.Frame(tab_locais_bkp)
         f_busca.pack(fill=X, pady=(0, 5))
         bstrap.Label(f_busca, text="🔍 Buscar:").pack(side=LEFT)
         self.var_busca_backup = tk.StringVar()
         self.var_busca_backup.trace("w", self.filtrar_backups)
         bstrap.Entry(f_busca, textvariable=self.var_busca_backup, bootstyle="danger").pack(side=LEFT, fill=X, expand=YES, padx=5)
 
-        self.lb_backups = ttk.Treeview(f1, height=10, bootstyle="danger", columns=("backup"), show="headings")
+        self.lb_backups = ttk.Treeview(tab_locais_bkp, height=6, bootstyle="danger", columns=("backup"), show="headings")
         self.lb_backups.heading("backup", text="Backups Disponíveis")
         self.lb_backups.column("backup", width=300, anchor=tk.W)
-        sb = bstrap.Scrollbar(f1, command=self.lb_backups.yview, bootstyle="danger-round")
+        sb = bstrap.Scrollbar(tab_locais_bkp, command=self.lb_backups.yview, bootstyle="danger-round")
         self.lb_backups.config(yscrollcommand=sb.set)
         sb.pack(side=RIGHT, fill=Y)
         self.lb_backups.pack(side=LEFT, fill=BOTH, expand=YES)
-        bstrap.Button(f1, text="🔄 Atualizar Lista", command=lambda: threading.Thread(target=self.load_backups, daemon=True).start(), bootstyle="link-danger").pack(fill=X)
+        bstrap.Button(tab_locais_bkp, text="🔄 Atualizar Locais", command=lambda: threading.Thread(target=self.load_backups, daemon=True).start(), bootstyle="secondary-outline").pack(fill=X, pady=5)
+
+        # --- TAB NUVEM BKP ---
+        f_busca_nb = bstrap.Frame(tab_nuvem_bkp)
+        f_busca_nb.pack(fill=X, pady=(0, 5))
+        bstrap.Button(f_busca_nb, text="🔄 Conectar/Recarregar", command=lambda: threading.Thread(target=self.popular_nuvem_backups, daemon=True).start(), bootstyle="danger-outline").pack(side=LEFT)
+        bstrap.Button(f_busca_nb, text="⬅️ Voltar Pasta", command=self.voltar_pasta_nuvem_bkp, bootstyle="secondary").pack(side=LEFT, padx=5)
+        
+        self.lbl_caminho_nuvem_bkp = bstrap.Label(f_busca_nb, text="/", bootstyle="secondary")
+        self.lbl_caminho_nuvem_bkp.pack(side=LEFT, padx=5)
+
+        self.lb_nuvem_bkp = ttk.Treeview(tab_nuvem_bkp, height=6, bootstyle="danger", columns=("tipo", "nome"), show="headings")
+        self.lb_nuvem_bkp.heading("tipo", text="Tipo")
+        self.lb_nuvem_bkp.column("tipo", width=50, stretch=False, anchor=tk.W)
+        self.lb_nuvem_bkp.heading("nome", text="Nome (Duplo-clique para abrir pasta)")
+        self.lb_nuvem_bkp.column("nome", width=250, anchor=tk.W)
+        self.lb_nuvem_bkp.bind("<Double-1>", self.on_nuvem_bkp_double_click)
+        
+        sb_nb = bstrap.Scrollbar(tab_nuvem_bkp, command=self.lb_nuvem_bkp.yview, bootstyle="danger-round")
+        self.lb_nuvem_bkp.config(yscrollcommand=sb_nb.set)
+        sb_nb.pack(side=RIGHT, fill=Y)
+        self.lb_nuvem_bkp.pack(side=LEFT, fill=BOTH, expand=YES)
+
+        bstrap.Button(tab_nuvem_bkp, text="⬇️ BAIXAR ARQUIVO SELECIONADO", command=self.baixar_da_nuvem_bkp, bootstyle="danger").pack(side=BOTTOM, fill=X, pady=5)
 
         f2 = bstrap.Labelframe(parent, text=" 2. Nome do Novo Banco ", bootstyle="danger", padding=10)
         f2.pack(fill=X, pady=10)
@@ -431,6 +513,7 @@ class GerenciadorMaxApp(bstrap.Window):
         add_section("SQL Laudo", ["SQL_DRIVER_LISTA", "SQL_SERVER_INSTANCE"], "SQL_LAUDO")
         add_section("SQL Restore", ["SERVIDOR", "USUARIO", "SENHA", "ODBC_DRIVER_RESTORE"], "SQL_RESTORE")
         add_section("Config INI MAX", ["INI_SECTION", "INI_KEY", "INI_SERVER_KEY"], "CONFIG_INI_MAX")
+        add_section("Cloud Nuvem", ["URL_CLOUD", "USUARIO_CLOUD", "SENHA_CLOUD"], "CLOUD")
         bstrap.Button(scroll_frame, text="💾 Guardar Configurações", command=self.salvar_config_aba, bootstyle="success").pack(pady=20)
 
     def salvar_config_aba(self):
@@ -555,6 +638,266 @@ class GerenciadorMaxApp(bstrap.Window):
                 self._all_versoes = sorted(versoes, reverse=True)
                 self.after(0, self.filtrar_versoes)
         except: pass
+
+    def voltar_pasta_nuvem(self):
+        global CAMINHO_NUVEM_ATUAL
+        if not CAMINHO_NUVEM_ATUAL or CAMINHO_NUVEM_ATUAL == '/': return
+        partes = [p for p in CAMINHO_NUVEM_ATUAL.strip('/').split('/') if p]
+        if len(partes) > 0:
+            partes.pop()
+        CAMINHO_NUVEM_ATUAL = '/' + '/'.join(partes) + ('/' if partes else '')
+        threading.Thread(target=self.popular_versoes_nuvem, daemon=True).start()
+
+    def on_nuvem_double_click(self, event):
+        sel = self.lb_nuvem.selection()
+        if not sel: return
+        item = self.lb_nuvem.item(sel[0], "values")
+        tipo, nome = item[0], item[1]
+        
+        if tipo == "📁":
+            global CAMINHO_NUVEM_ATUAL
+            if not CAMINHO_NUVEM_ATUAL.endswith('/'): CAMINHO_NUVEM_ATUAL += '/'
+            CAMINHO_NUVEM_ATUAL += nome + '/'
+            threading.Thread(target=self.popular_versoes_nuvem, daemon=True).start()
+
+    def popular_versoes_nuvem(self):
+        self.after(0, lambda: self.status.config(text="A conectar à Nuvem Maxdata via WebDAV..."))
+        try:
+            url = URL_CLOUD.rstrip('/')
+            if not url.startswith('http'): url = 'https://' + url
+            
+            global CAMINHO_NUVEM_ATUAL
+            if not CAMINHO_NUVEM_ATUAL: CAMINHO_NUVEM_ATUAL = '/'
+            
+            self.after(0, lambda: self.lbl_caminho_nuvem.config(text=CAMINHO_NUVEM_ATUAL))
+
+            # Caminho base do WebDAV Nextcloud, ex: https://cloud.maxdata.com.br/remote.php/webdav
+            webdav_url = url + "/remote.php/webdav" + urllib.parse.quote(CAMINHO_NUVEM_ATUAL)
+            
+            req = urllib.request.Request(webdav_url, method='PROPFIND')
+            req.add_header("Depth", "1")
+            if USUARIO_CLOUD and SENHA_CLOUD:
+                auth = base64.b64encode(f"{USUARIO_CLOUD}:{SENHA_CLOUD}".encode('utf-8')).decode('ascii')
+                req.add_header("Authorization", f"Basic {auth}")
+            
+            with urllib.request.urlopen(req, timeout=10) as response:
+                xml_data = response.read()
+
+            root = ET.fromstring(xml_data)
+            pastas = []
+            arquivos = []
+            
+            # Namespace do WebDAV é DAV:
+            namespaces = {'d': 'DAV:'}
+            
+            # O primeiro response é a própria pasta, pulamos ele comparando o href
+            primeiro = True
+            for resp in root.findall('d:response', namespaces):
+                href = resp.find('d:href', namespaces).text
+                href = urllib.parse.unquote(href)
+                
+                # Pega o nome do item a partir da rota
+                nome_item = [p for p in href.split('/') if p][-1]
+                
+                if primeiro:
+                    primeiro = False
+                    continue
+                
+                propstat = resp.find('d:propstat', namespaces)
+                if propstat:
+                    prop = propstat.find('d:prop', namespaces)
+                    resourcetype = prop.find('d:resourcetype', namespaces)
+                    if resourcetype is not None and resourcetype.find('d:collection', namespaces) is not None:
+                        pastas.append(nome_item)
+                    else:
+                        if nome_item.lower().endswith('.rar'):
+                            arquivos.append(nome_item)
+            
+            pastas.sort()
+            arquivos.sort(reverse=True)
+            
+            def att_ui():
+                for i in self.lb_nuvem.get_children(): self.lb_nuvem.delete(i)
+                for p in pastas: self.lb_nuvem.insert("", END, values=("📁", p))
+                for a in arquivos: self.lb_nuvem.insert("", END, values=("📄", a))
+                self.status.config(text=f"Pronto. {len(pastas)} pastas, {len(arquivos)} arquivos úteis.")
+            self.after(0, att_ui)
+        except Exception as e:
+            self.after(0, lambda e=e: self.status.config(text=f"Erro WebDAV: {str(e)[:50]}"))
+
+    def baixar_da_nuvem(self):
+        sel = self.lb_nuvem.selection()
+        if not sel: return
+        item = self.lb_nuvem.item(sel[0], "values")
+        tipo, nome = item[0], item[1]
+        
+        if tipo == "📁":
+            messagebox.showinfo("Aviso", "Você precisa selecionar um ARQUIVO (📄) para baixar, e não uma pasta.")
+            return
+
+        if messagebox.askyesno("Baixar da Nuvem", f"Deseja baixar {nome} para o computador?"):
+            self.status.config(text=f"A iniciar download de {nome}...")
+            threading.Thread(target=self.thread_download, args=(nome,), daemon=True).start()
+
+    def thread_download(self, arq):
+        try:
+            url = URL_CLOUD.rstrip('/')
+            if not url.startswith('http'): url = 'https://' + url
+            
+            global CAMINHO_NUVEM_ATUAL
+            webdav_url = url + "/remote.php/webdav" + urllib.parse.quote(CAMINHO_NUVEM_ATUAL + arq)
+            
+            req = urllib.request.Request(webdav_url)
+            if USUARIO_CLOUD and SENHA_CLOUD:
+                auth = base64.b64encode(f"{USUARIO_CLOUD}:{SENHA_CLOUD}".encode('utf-8')).decode('ascii')
+                req.add_header("Authorization", f"Basic {auth}")
+            
+            caminho_local = os.path.join(PASTA_DAS_VERSOES, arq)
+            with urllib.request.urlopen(req, timeout=15) as response, open(caminho_local, 'wb') as out_file:
+                tamanho_total = response.getheader('content-length')
+                tamanho_total = int(tamanho_total) if tamanho_total else None
+                baixado = 0
+                bloco = 1024 * 64 # 64KB
+                while True:
+                    dados = response.read(bloco)
+                    if not dados: break
+                    out_file.write(dados)
+                    baixado += len(dados)
+                    if tamanho_total:
+                        pct = int((baixado / tamanho_total) * 100)
+                        self.after(0, lambda p=pct, a=arq: self.status.config(text=f"A baixar {a}... {p}%"))
+            
+            self.after(0, lambda: self.status.config(text=f"Download de {arq} concluído!"))
+            self.after(0, lambda: messagebox.showinfo("Sucesso", f"Download concluído!\n{arq} salvo em Versões Locais."))
+            self.after(0, self.popular_versoes) # FIX UI Refresh
+        except Exception as e:
+            self.after(0, lambda m=str(e): messagebox.showerror("Erro Download", f"Falha ao baixar:\n{m}"))
+            self.after(0, lambda: self.status.config(text="Erro no download."))
+
+    def voltar_pasta_nuvem_bkp(self):
+        global CAMINHO_NUVEM_BACKUP
+        if not CAMINHO_NUVEM_BACKUP or CAMINHO_NUVEM_BACKUP == '/': return
+        partes = [p for p in CAMINHO_NUVEM_BACKUP.strip('/').split('/') if p]
+        if len(partes) > 0: partes.pop()
+        CAMINHO_NUVEM_BACKUP = '/' + '/'.join(partes) + ('/' if partes else '')
+        threading.Thread(target=self.popular_nuvem_backups, daemon=True).start()
+
+    def on_nuvem_bkp_double_click(self, event):
+        sel = self.lb_nuvem_bkp.selection()
+        if not sel: return
+        item = self.lb_nuvem_bkp.item(sel[0], "values")
+        tipo, nome = item[0], item[1]
+        
+        if tipo == "📁":
+            global CAMINHO_NUVEM_BACKUP
+            if not CAMINHO_NUVEM_BACKUP.endswith('/'): CAMINHO_NUVEM_BACKUP += '/'
+            CAMINHO_NUVEM_BACKUP += nome + '/'
+            threading.Thread(target=self.popular_nuvem_backups, daemon=True).start()
+
+    def popular_nuvem_backups(self):
+        self.after(0, lambda: self.status.config(text="A conectar à Nuvem Maxdata via WebDAV (Backups)..."))
+        try:
+            url = URL_CLOUD.rstrip('/')
+            if not url.startswith('http'): url = 'https://' + url
+            
+            global CAMINHO_NUVEM_BACKUP
+            if not CAMINHO_NUVEM_BACKUP: CAMINHO_NUVEM_BACKUP = '/'
+            
+            self.after(0, lambda: self.lbl_caminho_nuvem_bkp.config(text=CAMINHO_NUVEM_BACKUP))
+
+            webdav_url = url + "/remote.php/webdav" + urllib.parse.quote(CAMINHO_NUVEM_BACKUP)
+            
+            req = urllib.request.Request(webdav_url, method='PROPFIND')
+            req.add_header("Depth", "1")
+            if USUARIO_CLOUD and SENHA_CLOUD:
+                auth = base64.b64encode(f"{USUARIO_CLOUD}:{SENHA_CLOUD}".encode('utf-8')).decode('ascii')
+                req.add_header("Authorization", f"Basic {auth}")
+            
+            with urllib.request.urlopen(req, timeout=10) as response:
+                xml_data = response.read()
+
+            root = ET.fromstring(xml_data)
+            pastas = []
+            arquivos = []
+            namespaces = {'d': 'DAV:'}
+            primeiro = True
+            for resp in root.findall('d:response', namespaces):
+                href = resp.find('d:href', namespaces).text
+                href = urllib.parse.unquote(href)
+                nome_item = [p for p in href.split('/') if p][-1]
+                if primeiro:
+                    primeiro = False
+                    continue
+                propstat = resp.find('d:propstat', namespaces)
+                if propstat:
+                    prop = propstat.find('d:prop', namespaces)
+                    resourcetype = prop.find('d:resourcetype', namespaces)
+                    if resourcetype is not None and resourcetype.find('d:collection', namespaces) is not None:
+                        pastas.append(nome_item)
+                    else:
+                        if nome_item.lower().endswith(('.bak', '.zip', '.rar')):
+                            arquivos.append(nome_item)
+            
+            pastas.sort()
+            arquivos.sort(reverse=True)
+            
+            def att_ui():
+                for i in self.lb_nuvem_bkp.get_children(): self.lb_nuvem_bkp.delete(i)
+                for p in pastas: self.lb_nuvem_bkp.insert("", END, values=("📁", p))
+                for a in arquivos: self.lb_nuvem_bkp.insert("", END, values=("📄", a))
+                self.status.config(text=f"Pronto. {len(pastas)} pastas, {len(arquivos)} backups.")
+            self.after(0, att_ui)
+        except Exception as e:
+            self.after(0, lambda e=e: self.status.config(text=f"Erro WebDAV: {str(e)[:50]}"))
+
+    def baixar_da_nuvem_bkp(self):
+        sel = self.lb_nuvem_bkp.selection()
+        if not sel: return
+        item = self.lb_nuvem_bkp.item(sel[0], "values")
+        tipo, nome = item[0], item[1]
+        
+        if tipo == "📁":
+            messagebox.showinfo("Aviso", "Selecione um arquivo de backup (📄) para baixar.")
+            return
+
+        if messagebox.askyesno("Baixar Backup", f"Deseja baixar o backup {nome} para o computador?"):
+            self.status.config(text=f"A iniciar download de {nome}...")
+            threading.Thread(target=self.thread_download_bkp, args=(nome,), daemon=True).start()
+
+    def thread_download_bkp(self, arq):
+        try:
+            url = URL_CLOUD.rstrip('/')
+            if not url.startswith('http'): url = 'https://' + url
+            
+            global CAMINHO_NUVEM_BACKUP
+            webdav_url = url + "/remote.php/webdav" + urllib.parse.quote(CAMINHO_NUVEM_BACKUP + arq)
+            
+            req = urllib.request.Request(webdav_url)
+            if USUARIO_CLOUD and SENHA_CLOUD:
+                auth = base64.b64encode(f"{USUARIO_CLOUD}:{SENHA_CLOUD}".encode('utf-8')).decode('ascii')
+                req.add_header("Authorization", f"Basic {auth}")
+            
+            caminho_local = os.path.join(CAMINHO_BASE_MAX_BACKUP, arq)
+            with urllib.request.urlopen(req, timeout=15) as response, open(caminho_local, 'wb') as out_file:
+                tamanho_total = response.getheader('content-length')
+                tamanho_total = int(tamanho_total) if tamanho_total else None
+                baixado = 0
+                bloco = 1024 * 64 # 64KB
+                while True:
+                    dados = response.read(bloco)
+                    if not dados: break
+                    out_file.write(dados)
+                    baixado += len(dados)
+                    if tamanho_total:
+                        pct = int((baixado / tamanho_total) * 100)
+                        self.after(0, lambda p=pct, a=arq: self.status.config(text=f"A baixar {a}... {p}%"))
+            
+            self.after(0, lambda: self.status.config(text=f"Download de {arq} concluído!"))
+            self.after(0, lambda: messagebox.showinfo("Sucesso", f"Backup baixado com sucesso!\n{arq} salvo nos Backups Locais."))
+            self.after(0, self.load_backups)
+        except Exception as e:
+            self.after(0, lambda m=str(e): messagebox.showerror("Erro Download", f"Falha ao baixar backup:\n{m}"))
+            self.after(0, lambda: self.status.config(text="Erro no download do backup."))
 
     def load_backups(self):
         try:
