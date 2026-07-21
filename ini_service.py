@@ -41,7 +41,6 @@ class IniService:
                 c = cls.criar_parser()
                 c.read(caminho, encoding=enc)
                 if c.sections():
-                    logger.debug("INI '%s' lido com encoding: %s", caminho, enc)
                     return c
             except Exception:
                 continue
@@ -64,11 +63,27 @@ class IniService:
         return None
 
     @staticmethod
+    def set_value(config, section, key, value):
+        """Define um valor no INI, preservando a capitalização original se a chave já existir."""
+        if not key:
+            return
+        if not config.has_section(section):
+            config.add_section(section)
+        
+        existing_key = key
+        for opt in config.options(section):
+            if opt.strip().lower() == key.strip().lower():
+                existing_key = opt
+                break
+                
+        config.set(section, existing_key, str(value))
+
+    @staticmethod
     def salvar(config, caminho):
         """Salva o ConfigParser no arquivo."""
         try:
-            with open(caminho, 'w', encoding='utf-8') as f:
-                config.write(f)
+            with open(caminho, 'w', encoding='windows-1252') as f:
+                config.write(f, space_around_delimiters=False)
             logger.debug("INI salvo: %s", caminho)
         except OSError as e:
             logger.error("Erro ao salvar INI '%s': %s", caminho, e)

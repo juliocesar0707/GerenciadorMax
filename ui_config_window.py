@@ -29,7 +29,8 @@ class ConfigWindow(tk.Toplevel):
         self.title("Bem-vindo! Setup Inicial" if is_first_run else "Configuração de Caminhos")
         self.geometry("750x380")
         self.resizable(False, False)
-        self.transient(parent)
+        if parent.state() != 'withdrawn':
+            self.transient(parent)
         self.grab_set()
 
         self.var_sistema = tk.StringVar(value=config.pasta_do_sistema)

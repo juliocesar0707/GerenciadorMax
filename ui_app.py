@@ -521,9 +521,8 @@ class GerenciadorMaxApp(bstrap.Window):
 
         try:
             c = IniService.ler_arquivo(self.config.caminho_do_ini)
-            if not c.has_section(self.config.ini_section):
-                c.add_section(self.config.ini_section)
-            c.set(self.config.ini_section, self.config.ini_server_key, instancia)
+            IniService.set_value(c, self.config.ini_section or 'CON', 
+                                 self.config.ini_server_key or 'Data Source', instancia)
             IniService.salvar(c, self.config.caminho_do_ini)
         except Exception as e:
             logger.warning("Erro ao salvar instância no INI: %s", e)
@@ -539,13 +538,13 @@ class GerenciadorMaxApp(bstrap.Window):
             return
         try:
             c = IniService.ler_arquivo(self.config.caminho_do_ini)
-            if not c.has_section(self.config.ini_section):
-                c.add_section(self.config.ini_section)
-            c.set(self.config.ini_section, self.config.ini_key, novo)
+            IniService.set_value(c, self.config.ini_section or 'CON', 
+                                 self.config.ini_key or 'Initial catalog', novo)
             if hasattr(self, 'combo_instancia'):
                 inst = self.combo_instancia.get()
                 if inst:
-                    c.set(self.config.ini_section, self.config.ini_server_key, inst)
+                    IniService.set_value(c, self.config.ini_section or 'CON', 
+                                         self.config.ini_server_key or 'Data Source', inst)
             IniService.salvar(c, self.config.caminho_do_ini)
             messagebox.showinfo("Sucesso", f"Alterado para: {novo}")
             threading.Thread(target=self._carregar_banco_atual_sql, daemon=True).start()

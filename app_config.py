@@ -4,7 +4,6 @@ import configparser
 import dataclasses
 import os
 import sys
-import base64
 import logging
 
 logger = logging.getLogger(__name__)
@@ -109,26 +108,6 @@ class AppConfig:
         """Reseta a instância singleton (útil para testes)."""
         cls._instance = None
 
-    # --- Ofuscação de senhas ---
-    @staticmethod
-    def _encode_senha(valor):
-        """Codifica senha em base64 para ofuscação no arquivo de configuração."""
-        if not valor:
-            return ""
-        return "b64:" + base64.b64encode(valor.encode('utf-8')).decode('ascii')
-
-    @staticmethod
-    def _decode_senha(valor):
-        """Decodifica senha de base64. Suporta migração de valores em texto plano."""
-        if not valor:
-            return ""
-        if valor.startswith("b64:"):
-            try:
-                return base64.b64decode(valor[4:]).decode('utf-8')
-            except Exception:
-                return valor
-        return valor  # Texto plano (migração automática ao salvar)
-
     # --- Auto-detect ---
     def auto_detect(self):
         """Detecta automaticamente caminhos padrão do sistema."""
@@ -191,13 +170,13 @@ class AppConfig:
 
             self.servidor = config.get('SQL_RESTORE', 'SERVIDOR', fallback=self.servidor)
             self.usuario = config.get('SQL_RESTORE', 'USUARIO', fallback=self.usuario)
-            self.senha = self._decode_senha(config.get('SQL_RESTORE', 'SENHA', fallback=''))
+            self.senha = config.get('SQL_RESTORE', 'SENHA', fallback='')
             self.odbc_driver_restore = config.get('SQL_RESTORE', 'ODBC_DRIVER_RESTORE',
                                                    fallback=self.odbc_driver_restore)
 
             self.url_cloud = config.get('CLOUD', 'URL_CLOUD', fallback=self.url_cloud)
             self.usuario_cloud = config.get('CLOUD', 'USUARIO_CLOUD', fallback='')
-            self.senha_cloud = self._decode_senha(config.get('CLOUD', 'SENHA_CLOUD', fallback=''))
+            self.senha_cloud = config.get('CLOUD', 'SENHA_CLOUD', fallback='')
 
             logger.info("Configurações carregadas de '%s'", CONFIG_FILE_NAME)
         except Exception as e:
@@ -230,13 +209,13 @@ class AppConfig:
         config['SQL_RESTORE'] = {
             'SERVIDOR': self.servidor,
             'USUARIO': self.usuario,
-            'SENHA': self._encode_senha(self.senha),
+            'SENHA': self.senha,
             'ODBC_DRIVER_RESTORE': self.odbc_driver_restore,
         }
         config['CLOUD'] = {
             'URL_CLOUD': self.url_cloud,
             'USUARIO_CLOUD': self.usuario_cloud,
-            'SENHA_CLOUD': self._encode_senha(self.senha_cloud),
+            'SENHA_CLOUD': self.senha_cloud,
         }
 
         try:
