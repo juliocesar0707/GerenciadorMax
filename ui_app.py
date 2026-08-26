@@ -840,8 +840,33 @@ class GerenciadorMaxApp(bstrap.Window):
             logger.debug("Não foi possível obter versão do EXE: %s", e)
             return None
 
+    def _versao_selecionada(self):
+        """Nome do arquivo de versão selecionado na lista, ou None."""
+        sel = self.lb_versoes.selection()
+        if not sel:
+            return None
+        return self.lb_versoes.item(sel[0], "values")[0]
+
     def _lancar_erp(self):
-        """Lança o sistema ERP, verificando compatibilidade de versão."""
+        """Abre o sistema.
+
+        Com uma versão selecionada na lista, extrai-a primeiro e só então abre
+        o Manager. Sem seleção, mantém a checagem de compatibilidade com a
+        versão gravada no banco.
+        """
+        arq = self._versao_selecionada()
+        if arq:
+            if messagebox.askyesno(
+                "Abrir Sistema",
+                f"Extrair '{arq}' sobre a pasta do sistema e abrir o Manager?"
+            ):
+                self._extrair_em_thread(arq, self._abrir_manager)
+            return
+
+        self._abrir_com_checagem_de_versao()
+
+    def _abrir_com_checagem_de_versao(self):
+        """Abre o Manager comparando a versão do EXE com a do banco."""
         try:
             db_versao = self.lbl_versao_sql.cget("text")
             exe_versao = self._get_exe_versao(self.cfg.caminho_do_erp_cliente)
@@ -858,8 +883,7 @@ class GerenciadorMaxApp(bstrap.Window):
                         f"Versão BD: {db_versao} | Versão EXE: {exe_versao}.\n\n"
                         f"Atualizar para '{arquivo_rar}'?"
                     ):
-                        threading.Thread(target=self._thread_extrair, args=(arquivo_rar,),
-                                         daemon=True).start()
+                        self._extrair_em_thread(arquivo_rar, self._abrir_atualizador)
                         return
                 else:
                     messagebox.showwarning(
@@ -867,23 +891,32 @@ class GerenciadorMaxApp(bstrap.Window):
                         "Versões diferentes e ficheiro de extração não encontrado.\nA ignorar..."
                     )
 
-            subprocess.Popen([self.cfg.caminho_do_erp_cliente], cwd=self.cfg.pasta_do_sistema)
-            self._set_status("Sistema aberto.")
+            self._abrir_manager()
         except Exception as e:
             logger.error("Erro ao lançar ERP: %s", e)
             messagebox.showerror("Erro", f"Erro: {e}")
 
     def _lancar_atualizacao(self):
         """Extrai a versão selecionada e abre o atualizador."""
-        sel = self.lb_versoes.selection()
-        if not sel:
+        arq = self._versao_selecionada()
+        if not arq:
             messagebox.showinfo("Aviso", "Selecione uma versão na lista.")
             return
-        arq = self.lb_versoes.item(sel[0], "values")[0]
         if messagebox.askyesno("Confirmar", f"Atualizar para {arq}?"):
-            threading.Thread(target=self._thread_extrair, args=(arq,), daemon=True).start()
+            self._extrair_em_thread(arq, self._abrir_atualizador)
 
-    def _thread_extrair(self, arq):
+    def _extrair_em_thread(self, arq, ao_terminar):
+        """Dispara a extração em background.
+
+        Args:
+            arq: Nome do arquivo de versão em `pasta_das_versoes`.
+            ao_terminar: Callback executado na thread da UI após a extração.
+        """
+        threading.Thread(
+            target=self._thread_extrair, args=(arq, ao_terminar), daemon=True
+        ).start()
+
+    def _thread_extrair(self, arq, ao_terminar):
         """Thread de extração de versão com 7-Zip."""
         try:
             self._set_status(f"A extrair {arq}...")
@@ -893,16 +926,28 @@ class GerenciadorMaxApp(bstrap.Window):
                 f'-o{self.cfg.pasta_do_sistema}', '-y'
             ]
             subprocess.run(cmd, check=True, creationflags=subprocess.CREATE_NO_WINDOW)
-            self.after(0, self._lancar_atualizador_callback)
+            logger.info("Versão extraída: %s", arq)
+            self.after(0, ao_terminar)
         except Exception as e:
             logger.error("Erro na extração: %s", e)
             self._set_status("Erro na extração.")
             self.after(0, lambda m=str(e): messagebox.showerror("Erro Extração", m))
 
-    def _lancar_atualizador_callback(self):
-        """Lança o MAX_Atualiza.exe após extração."""
+    def _abrir_manager(self):
+        """Abre o MAX_Manager2.exe."""
         try:
-            subprocess.Popen([self.cfg.caminho_do_max_atualiza], cwd=self.cfg.pasta_do_sistema)
+            subprocess.Popen([self.cfg.caminho_do_erp_cliente],
+                             cwd=self.cfg.pasta_do_sistema)
+            self.status.config(text="Sistema aberto.")
+        except Exception as e:
+            logger.error("Erro ao abrir o sistema: %s", e)
+            messagebox.showerror("Erro", f"{e}")
+
+    def _abrir_atualizador(self):
+        """Abre o MAX_Atualiza.exe após extração."""
+        try:
+            subprocess.Popen([self.cfg.caminho_do_max_atualiza],
+                             cwd=self.cfg.pasta_do_sistema)
             self.status.config(text="Atualizador aberto.")
         except Exception as e:
             logger.error("Erro ao abrir atualizador: %s", e)
