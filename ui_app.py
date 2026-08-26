@@ -17,6 +17,7 @@ from app_config import (
 from ini_service import IniService
 from sql_service import SqlService
 from webdav_client import WebDAVClient
+import sevenzip
 import ui_theme
 from ui_widgets import RoundedButton
 
@@ -905,6 +906,13 @@ class GerenciadorMaxApp(bstrap.Window):
         if messagebox.askyesno("Confirmar", f"Atualizar para {arq}?"):
             self._extrair_em_thread(arq, self._abrir_atualizador)
 
+    def _bloqueio_de_extracao(self):
+        """Executáveis do sistema que estão abertos e impediriam a extração."""
+        return sevenzip.executaveis_bloqueados([
+            self.cfg.caminho_do_erp_cliente,
+            self.cfg.caminho_do_max_atualiza,
+        ])
+
     def _extrair_em_thread(self, arq, ao_terminar):
         """Dispara a extração em background.
 
@@ -912,6 +920,16 @@ class GerenciadorMaxApp(bstrap.Window):
             arq: Nome do arquivo de versão em `pasta_das_versoes`.
             ao_terminar: Callback executado na thread da UI após a extração.
         """
+        abertos = self._bloqueio_de_extracao()
+        if abertos:
+            messagebox.showwarning(
+                "Sistema aberto",
+                "Feche antes de extrair:\n\n  " + "\n  ".join(abertos) +
+                "\n\nO 7-Zip não consegue sobrescrever um executável em uso."
+            )
+            self._set_status("Extração cancelada: sistema aberto.")
+            return
+
         threading.Thread(
             target=self._thread_extrair, args=(arq, ao_terminar), daemon=True
         ).start()
@@ -920,12 +938,11 @@ class GerenciadorMaxApp(bstrap.Window):
         """Thread de extração de versão com 7-Zip."""
         try:
             self._set_status(f"A extrair {arq}...")
-            cmd = [
-                self.cfg.caminho_do_7zip, 'x',
+            sevenzip.extrair(
+                self.cfg.caminho_do_7zip,
                 os.path.join(self.cfg.pasta_das_versoes, arq),
-                f'-o{self.cfg.pasta_do_sistema}', '-y'
-            ]
-            subprocess.run(cmd, check=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                self.cfg.pasta_do_sistema,
+            )
             logger.info("Versão extraída: %s", arq)
             self.after(0, ao_terminar)
         except Exception as e:

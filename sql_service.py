@@ -2,11 +2,12 @@
 
 import logging
 import os
-import subprocess
 import shutil
 import time
 
 import pyodbc
+
+import sevenzip
 
 from app_config import SQL_QUERY_VERSAO
 
@@ -211,8 +212,7 @@ class SqlService:
                 msg("A extrair ficheiro...")
                 tmp_dir = os.path.join(caminho_backup, f"_tmp_{int(time.time())}")
                 os.makedirs(tmp_dir, exist_ok=True)
-                cmd = [caminho_7zip, 'x', origem, f'-o{tmp_dir}', '-y']
-                subprocess.run(cmd, check=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                sevenzip.extrair(caminho_7zip, origem, tmp_dir)
 
                 encontrado = next(
                     (os.path.join(root, f)
