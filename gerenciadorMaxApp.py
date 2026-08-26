@@ -23,9 +23,12 @@ def setup_logging():
     root_logger.addHandler(console)
 
     # File handler (DEBUG+, rotating 1MB x 3)
+    # Caminho absoluto: empacotado, o diretório de trabalho pode ser
+    # qualquer um, e o log acabaria espalhado fora da pasta do app.
     try:
+        from app_config import diretorio_base
         file_handler = RotatingFileHandler(
-            'gerenciador_max.log',
+            os.path.join(diretorio_base(), 'gerenciador_max.log'),
             maxBytes=1024 * 1024,
             backupCount=3,
             encoding='utf-8'

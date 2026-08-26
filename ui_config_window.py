@@ -1,10 +1,12 @@
 """Janela de configuração de caminhos (setup inicial e edição)."""
 
 import tkinter as tk
-from tkinter import BOTH, YES, X, LEFT, RIGHT
+from tkinter import BOTH, YES, W, X, LEFT, RIGHT
 from tkinter import ttk, messagebox, filedialog
-import ttkbootstrap as bstrap
 import logging
+
+import ui_theme
+from ui_widgets import RoundedButton
 
 logger = logging.getLogger(__name__)
 
@@ -38,15 +40,15 @@ class ConfigWindow(tk.Toplevel):
         self.var_ini = tk.StringVar(value=config.caminho_do_ini)
         self.var_7zip = tk.StringVar(value=config.caminho_do_7zip)
 
-        main_frame = ttk.Frame(self, padding=20)
+        main_frame = ttk.Frame(self, style="Card.TFrame", padding=24)
         main_frame.pack(fill=BOTH, expand=YES)
 
-        if is_first_run:
-            bstrap.Label(main_frame, text="Primeira execução! Confirme os diretórios de trabalho:",
-                         font=("bold", 12), bootstyle="success").pack(pady=(0, 15))
-        else:
-            bstrap.Label(main_frame, text="Corrija os caminhos:",
-                         font=("bold", 12), bootstyle="danger").pack(pady=(0, 15))
+        titulo = ("Primeira execução! Confirme os diretórios de trabalho:"
+                  if is_first_run else "Corrija os caminhos:")
+        ttk.Label(
+            main_frame, text=titulo, style="CardTitle.TLabel",
+            font=(ui_theme.FONT_FAMILY, 12, "bold"),
+        ).pack(anchor=W, pady=(0, 18))
 
         self._criar_campo(main_frame, "Pasta do Sistema", self.var_sistema, True)
         self._criar_campo(main_frame, "Pasta de Versões", self.var_versoes, True)
@@ -54,22 +56,23 @@ class ConfigWindow(tk.Toplevel):
         self._criar_campo(main_frame, "Arquivo .ini", self.var_ini, False)
         self._criar_campo(main_frame, "Executável 7-Zip", self.var_7zip, False)
 
-        btn_frame = ttk.Frame(main_frame)
-        btn_frame.pack(fill=X, pady=(20, 0))
-        bstrap.Button(btn_frame, text="Salvar e Continuar",
-                      command=self._salvar, bootstyle="success").pack(side=RIGHT, padx=5)
+        btn_frame = ttk.Frame(main_frame, style="Card.TFrame")
+        btn_frame.pack(fill=X, pady=(22, 0))
+        RoundedButton(btn_frame, text="Salvar e Continuar",
+                      command=self._salvar, variant="primary").pack(side=RIGHT, padx=(6, 0))
         if not is_first_run:
-            bstrap.Button(btn_frame, text="Cancelar",
-                          command=self.destroy, bootstyle="secondary").pack(side=RIGHT)
+            RoundedButton(btn_frame, text="Cancelar",
+                          command=self.destroy, variant="outline").pack(side=RIGHT)
 
     def _criar_campo(self, parent, label, var, is_dir):
         """Cria uma linha de campo com label, entry e botão de seleção."""
-        f = ttk.Frame(parent)
+        f = ttk.Frame(parent, style="Card.TFrame")
         f.pack(fill=X, pady=5)
-        bstrap.Label(f, text=label, width=20, bootstyle="inverse-secondary").pack(side=LEFT)
-        bstrap.Entry(f, textvariable=var, bootstyle="danger").pack(side=LEFT, fill=X, expand=YES, padx=5)
-        cmd = lambda: self._selecionar(var, is_dir)
-        bstrap.Button(f, text="...", command=cmd, bootstyle="info-outline", width=4).pack(side=LEFT)
+        ttk.Label(f, text=label, width=20, style="CardMuted.TLabel").pack(side=LEFT)
+        ttk.Entry(f, textvariable=var, style="Campo.TEntry").pack(
+            side=LEFT, fill=X, expand=YES, padx=6)
+        RoundedButton(f, text="...", variant="outline", padx=12,
+                      command=lambda: self._selecionar(var, is_dir)).pack(side=LEFT)
 
     @staticmethod
     def _selecionar(var, is_dir):

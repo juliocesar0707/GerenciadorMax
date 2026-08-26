@@ -11,6 +11,22 @@ logger = logging.getLogger(__name__)
 
 CONFIG_FILE_NAME = 'gerenciador_config.ini'
 
+
+def diretorio_base():
+    """Pasta onde ficam os arquivos do app (config e log).
+
+    Empacotado com PyInstaller, `sys.executable` é o .exe; em
+    desenvolvimento vale a pasta deste módulo. Usar caminho relativo faria
+    o app procurar o config no diretório de trabalho de quem o abriu —
+    era o que acontecia ao rodar o .exe a partir de outra pasta.
+    """
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+CONFIG_FILE_PATH = os.path.join(diretorio_base(), CONFIG_FILE_NAME)
+
 # Prefixo que marca um valor ofuscado no INI.
 # ATENÇÃO: base64 é OFUSCAÇÃO, não criptografia — protege apenas contra leitura
 # casual do arquivo, e não contra quem tenha acesso à máquina.
@@ -165,7 +181,7 @@ class AppConfig:
     # --- Carregar / Salvar ---
     def carregar(self):
         """Carrega configurações do arquivo INI. Cria defaults na primeira execução."""
-        if not os.path.exists(CONFIG_FILE_NAME):
+        if not os.path.exists(CONFIG_FILE_PATH):
             self.primeira_execucao = True
             self.auto_detect()
             self.salvar()
@@ -174,7 +190,7 @@ class AppConfig:
 
         try:
             config = configparser.ConfigParser()
-            config.read(CONFIG_FILE_NAME, encoding='utf-8')
+            config.read(CONFIG_FILE_PATH, encoding='utf-8')
 
             self.pasta_do_sistema = config.get('CAMINHOS', 'PASTA_DO_SISTEMA', fallback=self.pasta_do_sistema)
             self.pasta_das_versoes = config.get('CAMINHOS', 'PASTA_DAS_VERSOES', fallback=self.pasta_das_versoes)
@@ -205,7 +221,7 @@ class AppConfig:
             self.usuario_cloud = config.get('CLOUD', 'USUARIO_CLOUD', fallback='')
             self.senha_cloud = desofuscar(config.get('CLOUD', 'SENHA_CLOUD', fallback=''))
 
-            logger.info("Configurações carregadas de '%s'", CONFIG_FILE_NAME)
+            logger.info("Configurações carregadas de '%s'", CONFIG_FILE_PATH)
         except Exception as e:
             logger.error("Erro ao carregar configurações: %s", e)
 
@@ -246,9 +262,9 @@ class AppConfig:
         }
 
         try:
-            with open(CONFIG_FILE_NAME, 'w', encoding='utf-8') as f:
+            with open(CONFIG_FILE_PATH, 'w', encoding='utf-8') as f:
                 config.write(f)
-            logger.info("Configurações salvas em '%s'", CONFIG_FILE_NAME)
+            logger.info("Configurações salvas em '%s'", CONFIG_FILE_PATH)
         except OSError as e:
             logger.error("Erro ao salvar configurações: %s", e)
 
