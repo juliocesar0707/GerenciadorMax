@@ -6,8 +6,6 @@ from tkinter import ttk, messagebox, filedialog
 import ttkbootstrap as bstrap
 import logging
 
-from app_config import CONFIG_FILE_NAME
-
 logger = logging.getLogger(__name__)
 
 
@@ -23,7 +21,8 @@ class ConfigWindow(tk.Toplevel):
             is_first_run: True se for a primeira execução.
         """
         super().__init__(parent)
-        self.config = config
+        # NÃO usar self.config: sobrescreveria tk.Misc.config() da janela.
+        self.cfg = config
         self.salvo = False
 
         self.title("Bem-vindo! Setup Inicial" if is_first_run else "Configuração de Caminhos")
@@ -82,12 +81,12 @@ class ConfigWindow(tk.Toplevel):
     def _salvar(self):
         """Salva os caminhos editados na configuração."""
         try:
-            self.config.pasta_do_sistema = self.var_sistema.get()
-            self.config.pasta_das_versoes = self.var_versoes.get()
-            self.config.caminho_base_backup = self.var_backup.get()
-            self.config.caminho_do_ini = self.var_ini.get()
-            self.config.caminho_do_7zip = self.var_7zip.get()
-            self.config.salvar()
+            self.cfg.pasta_do_sistema = self.var_sistema.get()
+            self.cfg.pasta_das_versoes = self.var_versoes.get()
+            self.cfg.caminho_base_backup = self.var_backup.get()
+            self.cfg.caminho_do_ini = self.var_ini.get()
+            self.cfg.caminho_do_7zip = self.var_7zip.get()
+            self.cfg.salvar()
             self.salvo = True
             logger.info("Configuração de caminhos salva via ConfigWindow")
             self.destroy()

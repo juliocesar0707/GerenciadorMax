@@ -1,2 +1,5 @@
 __pycache__/
 *.log
+
+# Contém credenciais (SQL sa + Nextcloud) — nunca versionar
+gerenciador_config.ini

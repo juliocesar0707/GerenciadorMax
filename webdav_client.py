@@ -23,12 +23,21 @@ class WebDAVClient:
             senha: Senha para autenticação Basic.
             cache_ttl: Tempo de vida do cache em segundos (default: 120).
         """
-        self.url = url.rstrip('/') if url else ''
-        self.usuario = usuario
-        self.senha = senha
         self.cache_ttl = cache_ttl
         self._cache = {}  # {path: (timestamp, pastas, arquivos)}
         self.caminho_atual = '/'
+        self.reconfigurar(url, usuario, senha)
+
+    def reconfigurar(self, url, usuario, senha):
+        """Troca as credenciais mantendo a mesma instância.
+
+        A UI guarda referências a este cliente em closures, então substituir a
+        instância deixaria os botões apontando para as credenciais antigas.
+        """
+        self.url = url.rstrip('/') if url else ''
+        self.usuario = usuario
+        self.senha = senha
+        self.limpar_cache()
 
     def _auth_header(self):
         """Retorna header de autenticação Basic ou None."""

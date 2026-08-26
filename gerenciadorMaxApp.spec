@@ -22,6 +22,7 @@ a = Analysis(
         'webdav_client',
         'ui_app',
         'ui_config_window',
+        'ui_theme',
     ],
     hookspath=[],
     hooksconfig={},

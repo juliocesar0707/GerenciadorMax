@@ -1,5 +1,6 @@
 """Configuração centralizada do GerenciadorMax."""
 
+import base64
 import configparser
 import dataclasses
 import os
@@ -9,6 +10,11 @@ import logging
 logger = logging.getLogger(__name__)
 
 CONFIG_FILE_NAME = 'gerenciador_config.ini'
+
+# Prefixo que marca um valor ofuscado no INI.
+# ATENÇÃO: base64 é OFUSCAÇÃO, não criptografia — protege apenas contra leitura
+# casual do arquivo, e não contra quem tenha acesso à máquina.
+OBFUSCATION_PREFIX = 'b64:'
 SQL_QUERY_VERSAO = "select cofMaxAtualizaVersao from config"
 
 # Extensões de arquivo aceitas
@@ -49,6 +55,27 @@ CONFIG_SECTIONS_UI = [
     ("Config INI MAX", ["INI_SECTION", "INI_KEY", "INI_SERVER_KEY"], "CONFIG_INI_MAX"),
     ("Cloud Nuvem", ["URL_CLOUD", "USUARIO_CLOUD", "SENHA_CLOUD"], "CLOUD"),
 ]
+
+
+def ofuscar(valor):
+    """Ofusca um valor para gravação no INI. Retorna '' para valores vazios."""
+    if not valor:
+        return ''
+    return OBFUSCATION_PREFIX + base64.b64encode(valor.encode('utf-8')).decode('ascii')
+
+
+def desofuscar(valor):
+    """Reverte `ofuscar`. Valores sem o prefixo são devolvidos como estão
+    (compatibilidade com configs antigos gravados em texto puro)."""
+    if not valor:
+        return ''
+    if not valor.startswith(OBFUSCATION_PREFIX):
+        return valor
+    try:
+        return base64.b64decode(valor[len(OBFUSCATION_PREFIX):]).decode('utf-8')
+    except (ValueError, UnicodeDecodeError) as e:
+        logger.warning("Valor ofuscado inválido no INI: %s", e)
+        return ''
 
 
 @dataclasses.dataclass
@@ -170,13 +197,13 @@ class AppConfig:
 
             self.servidor = config.get('SQL_RESTORE', 'SERVIDOR', fallback=self.servidor)
             self.usuario = config.get('SQL_RESTORE', 'USUARIO', fallback=self.usuario)
-            self.senha = config.get('SQL_RESTORE', 'SENHA', fallback='')
+            self.senha = desofuscar(config.get('SQL_RESTORE', 'SENHA', fallback=''))
             self.odbc_driver_restore = config.get('SQL_RESTORE', 'ODBC_DRIVER_RESTORE',
                                                    fallback=self.odbc_driver_restore)
 
             self.url_cloud = config.get('CLOUD', 'URL_CLOUD', fallback=self.url_cloud)
             self.usuario_cloud = config.get('CLOUD', 'USUARIO_CLOUD', fallback='')
-            self.senha_cloud = config.get('CLOUD', 'SENHA_CLOUD', fallback='')
+            self.senha_cloud = desofuscar(config.get('CLOUD', 'SENHA_CLOUD', fallback=''))
 
             logger.info("Configurações carregadas de '%s'", CONFIG_FILE_NAME)
         except Exception as e:
@@ -209,13 +236,13 @@ class AppConfig:
         config['SQL_RESTORE'] = {
             'SERVIDOR': self.servidor,
             'USUARIO': self.usuario,
-            'SENHA': self.senha,
+            'SENHA': ofuscar(self.senha),
             'ODBC_DRIVER_RESTORE': self.odbc_driver_restore,
         }
         config['CLOUD'] = {
             'URL_CLOUD': self.url_cloud,
             'USUARIO_CLOUD': self.usuario_cloud,
-            'SENHA_CLOUD': self.senha_cloud,
+            'SENHA_CLOUD': ofuscar(self.senha_cloud),
         }
 
         try:
