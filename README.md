@@ -149,31 +149,6 @@ O `gerenciador_config.ini` está no `.gitignore` e **nunca deve ser versionado**
 
 ---
 
-## Testes
-
-A suíte não depende de pytest nem da máquina real: cada teste monta uma árvore
-temporária com a estrutura que o app espera (`Max/`, `Versoes/`, `backup/`,
-`max.ini`, um `7z.exe` falso) e redireciona o caminho do arquivo de configuração,
-de modo que nenhum teste toque no `gerenciador_config.ini` do usuário.
-
-```powershell
-python tests/run_all.py
-```
-
-| Arquivo | Cobre |
-|---|---|
-| `test_config.py` | Ofuscação, ancoragem do `.ini` na pasta do app, tela de setup |
-| `test_launcher.py` | Fluxos de Abrir Sistema e Atualizar Sistema, com o 7-Zip e o `Popen` interceptados |
-| `test_nuvem.py` | Painel WebDAV: falha de rede, pasta vazia, troca de credenciais, tamanho/data, download interrompido |
-| `test_sevenzip.py` | Diagnóstico das falhas do 7-Zip e detecção de executável em uso |
-| `test_sql.py` | Sugestão de nome de banco, escape de apóstrofo e de senha, tradução dos erros do ODBC |
-| `test_ui.py` | Montagem da janela, filtros das três listas, barra de progresso, sugestão de nome, SQL fora do ar |
-
-Um teste do `test_sevenzip.py` roda o 7-Zip de verdade e se pula sozinho quando
-ele não está instalado.
-
----
-
 ## Build
 
 ```powershell
@@ -199,7 +174,6 @@ sql_service.py         Conexões ODBC, listagem, RESTORE e DROP
 ini_service.py         Leitura tolerante do max.ini (5 codificações + fallback regex)
 sevenzip.py            Execução do 7-Zip com diagnóstico legível e detecção de arquivo travado
 webdav_client.py       Cliente WebDAV do Nextcloud com cache
-tests/                 Suíte sem pytest — python tests/run_all.py
 ```
 
 Operações lentas (SQL, rede, 7-Zip) rodam em threads daemon; a atualização da
