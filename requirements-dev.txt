@@ -1,0 +1,7 @@
+# GerenciadorMax — dependências de desenvolvimento e empacotamento
+# Instalação:  pip install -r requirements-dev.txt
+
+-r requirements.txt
+
+# Gera o executável a partir de gerenciadorMaxApp.spec
+pyinstaller==6.17.0

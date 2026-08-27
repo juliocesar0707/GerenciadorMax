@@ -1,0 +1,18 @@
+# GerenciadorMax — dependências de execução
+# Instalação:  pip install -r requirements.txt
+#
+# Requer Python 3.12+ no Windows. O tkinter acompanha a instalação padrão
+# do Python; se o app não abrir, reinstale o Python com a opção
+# "tcl/tk and IDLE" marcada.
+
+# Conexão ODBC com o SQL Server (listagem de bancos, RESTORE, DROP).
+# Precisa também do "ODBC Driver 17 for SQL Server" instalado no Windows —
+# é um pacote da Microsoft, não vem pelo pip.
+pyodbc==5.3.0
+
+# Tema e widgets da interface (janela principal, notebook, combobox).
+ttkbootstrap==1.16.0
+
+# win32api para ler a versão dos executáveis do MAX e win32file nos testes
+# de arquivo em uso. Só existe no Windows.
+pywin32==311

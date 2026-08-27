@@ -1,5 +1,17 @@
+# Ambiente virtual
+.venv/
+
+# Artefatos de build do PyInstaller — gerados por `pyinstaller gerenciadorMaxApp.spec`
+build/
+dist/
+
+# Bytecode
 __pycache__/
+*.pyc
+
+# Logs rotativos do app (gerenciador_max.log e .1/.2/.3)
 *.log
+*.log.[0-9]
 
 # Contém credenciais (SQL sa + Nextcloud) — nunca versionar
 gerenciador_config.ini
