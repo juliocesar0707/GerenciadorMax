@@ -61,12 +61,18 @@ class GerenciadorMaxApp(bstrap.Window):
         self._nuvem_carregada = set()   # id(treeview) das abas já listadas
         self._nome_sugerido = ""        # última sugestão de nome de banco
 
-        # WebDAV clients (um para versões, outro para backups)
+        # Um cliente por aba, porque cada uma navega em uma pasta diferente —
+        # mas com o MESMO cache: a listagem guardada é idêntica, só muda a
+        # extensão que cada aba exibe. Antes, abrir o painel disparava dois
+        # PROPFIND da mesma pasta.
+        self._cache_nuvem = {}
         self.webdav_versoes = WebDAVClient(
-            config.url_cloud, config.usuario_cloud, config.senha_cloud
+            config.url_cloud, config.usuario_cloud, config.senha_cloud,
+            cache=self._cache_nuvem
         )
         self.webdav_backups = WebDAVClient(
-            config.url_cloud, config.usuario_cloud, config.senha_cloud
+            config.url_cloud, config.usuario_cloud, config.senha_cloud,
+            cache=self._cache_nuvem
         )
 
     def iniciar_interface(self):
@@ -75,6 +81,9 @@ class GerenciadorMaxApp(bstrap.Window):
         self.process_queue()
         self.deiconify()
         threading.Thread(target=self._carregamento_assincrono, daemon=True).start()
+        # Em paralelo, e não dentro do carregamento local: a nuvem é a parte
+        # lenta e não deve atrasar o que já está no disco.
+        threading.Thread(target=self._aquecer_nuvem, daemon=True).start()
 
     def _carregamento_assincrono(self):
         """Carrega dados em background (SQL + arquivos locais)."""
@@ -87,6 +96,20 @@ class GerenciadorMaxApp(bstrap.Window):
     def _set_status(self, texto):
         """Atualiza a barra de status a partir de qualquer thread."""
         self.after(0, lambda t=texto: self.status.config(text=t))
+
+    def _aquecer_nuvem(self):
+        """Lista a raiz da nuvem no arranque, para o painel abrir preenchido.
+
+        Uma requisição só: como o cache é compartilhado pelas duas abas, ambas
+        encontram a listagem pronta quando o painel é aberto.
+        """
+        if not (self.cfg.url_cloud and self.cfg.usuario_cloud):
+            return
+        try:
+            self.webdav_versoes.listar(path='/', extensoes=EXTENSOES_VERSAO)
+            logger.info("Listagem da nuvem aquecida no arranque")
+        except Exception as e:
+            logger.debug("Aquecimento da nuvem falhou: %s", e)
 
     # =========================================================================
     # LAYOUT PRINCIPAL
@@ -563,6 +586,9 @@ class GerenciadorMaxApp(bstrap.Window):
             messagebox.showinfo("Sucesso", "Configurações guardadas!")
             logger.info("Configurações salvas com sucesso")
             threading.Thread(target=self._carregamento_assincrono, daemon=True).start()
+            # O cache foi limpo junto com as credenciais: reaquece agora, para
+            # a próxima abertura do painel não pagar a espera de novo.
+            threading.Thread(target=self._aquecer_nuvem, daemon=True).start()
         except Exception as e:
             logger.error("Erro ao guardar configurações: %s", e)
             messagebox.showerror("Erro", f"Erro ao guardar: {e}")
@@ -754,50 +780,72 @@ class GerenciadorMaxApp(bstrap.Window):
     # =========================================================================
     # LÓGICA: WEBDAV GENÉRICO (reutilizado para versões e backups)
     # =========================================================================
+    def _render_nuvem(self, treeview, lbl_caminho, caminho, pastas, arquivos):
+        """Desenha uma listagem da nuvem. Roda na thread da UI."""
+        lbl_caminho.config(text=caminho)
+        for i in treeview.get_children():
+            treeview.delete(i)
+        for p in pastas:
+            treeview.insert("", END, values=("📁", p, "", ""))
+        for a in arquivos:
+            treeview.insert("", END, values=("📄", a.nome, a.tamanho, a.modificado))
+        if not pastas and not arquivos:
+            treeview.insert("", END, values=("—", "(pasta vazia)", "", ""))
+
     def _popular_nuvem(self, client, treeview, lbl_caminho, extensoes, force_refresh=False):
         """Popula um treeview com conteúdo WebDAV.
+
+        Pasta já visitada aparece na hora, direto do cache, e a atualização
+        acontece em silêncio por baixo. Ver dados de minutos atrás é melhor que
+        encarar uma lista vazia enquanto o PROPFIND não volta — e, se a
+        atualização falhar, o que está na tela continua valendo.
 
         Args:
             client: Instância de WebDAVClient.
             treeview: Widget Treeview a popular.
             lbl_caminho: Label que mostra o caminho atual.
             extensoes: Tupla de extensões de arquivo a filtrar.
-            force_refresh: Ignora cache.
+            force_refresh: Ignora o cache e vai direto ao servidor.
         """
-        # O PROPFIND do Nextcloud costuma levar vários segundos; sem esta
-        # marcação a lista fica vazia nesse intervalo e parece defeito.
-        def mostrar_carregando():
-            lbl_caminho.config(text=client.caminho_atual)
-            for i in treeview.get_children():
-                treeview.delete(i)
-            treeview.insert("", END, values=("⏳", "A carregar...", "", ""))
+        caminho = client.caminho_atual
+        em_cache = None if force_refresh else client.consultar_cache(extensoes=extensoes)
 
-        self.after(0, mostrar_carregando)
-        self._set_status(f"Nuvem: a listar {client.caminho_atual}...")
-
-        try:
-            pastas, arquivos = client.listar(force_refresh=force_refresh, extensoes=extensoes)
-
-            def att_ui():
+        if em_cache is not None:
+            pastas, arquivos, vencido = em_cache
+            # Ligado por argumento padrão: o `after` roda depois, e a essa
+            # altura estes nomes já podem apontar para a listagem nova.
+            self.after(0, lambda p=pastas, a=arquivos: self._render_nuvem(
+                treeview, lbl_caminho, caminho, p, a))
+            self._nuvem_carregada.add(id(treeview))
+            self._set_status(f"Nuvem: {len(pastas)} pastas, {len(arquivos)} arquivos.")
+            if not vencido:
+                return
+        else:
+            # Sem nada em cache não há o que mostrar; sem esta marcação a lista
+            # fica vazia no intervalo e parece defeito.
+            def mostrar_carregando():
+                lbl_caminho.config(text=caminho)
                 for i in treeview.get_children():
                     treeview.delete(i)
-                for p in pastas:
-                    treeview.insert("", END, values=("📁", p, "", ""))
-                for a in arquivos:
-                    treeview.insert(
-                        "", END, values=("📄", a.nome, a.tamanho, a.modificado)
-                    )
-                if not pastas and not arquivos:
-                    treeview.insert("", END, values=("—", "(pasta vazia)", "", ""))
-                self.status.config(
-                    text=f"Nuvem: {len(pastas)} pastas, {len(arquivos)} arquivos."
-                )
+                treeview.insert("", END, values=("⏳", "A carregar...", "", ""))
 
-            self.after(0, att_ui)
-            self._nuvem_carregada.add(id(treeview))
+            self.after(0, mostrar_carregando)
+            self._set_status(f"Nuvem: a listar {caminho}...")
+
+        try:
+            pastas, arquivos = client.listar(
+                force_refresh=em_cache is not None or force_refresh,
+                extensoes=extensoes,
+            )
         except Exception as e:
             logger.warning("Erro WebDAV: %s", e)
             erro = str(e)[:60]
+
+            if em_cache is not None:
+                # Já há uma listagem na tela: preservá-la é mais útil que
+                # trocá-la por uma linha de erro.
+                self._set_status(f"Nuvem desatualizada — {erro}")
+                return
 
             def att_erro():
                 for i in treeview.get_children():
@@ -806,6 +854,12 @@ class GerenciadorMaxApp(bstrap.Window):
 
             self.after(0, att_erro)
             self._set_status(f"Erro WebDAV: {erro}")
+            return
+
+        self.after(0, lambda p=pastas, a=arquivos: self._render_nuvem(
+            treeview, lbl_caminho, caminho, p, a))
+        self._nuvem_carregada.add(id(treeview))
+        self._set_status(f"Nuvem: {len(pastas)} pastas, {len(arquivos)} arquivos.")
 
     def _voltar_nuvem(self, client, treeview, lbl_caminho, extensoes):
         """Volta uma pasta no navegador WebDAV."""

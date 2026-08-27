@@ -61,12 +61,26 @@ segue indeterminada. As mensagens de etapa aparecem no log da própria coluna.
 **Cloud Maxdata (painel lateral)** — navegador WebDAV do Nextcloud com abas
 separadas para Versões e Backups, mostrando nome, tamanho e data de modificação
 de cada arquivo. Navega nas pastas, baixa o selecionado para a pasta local
-correspondente e atualiza a lista local ao terminar. As listagens ficam em cache
-por 2 minutos, já que o `PROPFIND` do Nextcloud é lento.
+correspondente e atualiza a lista local ao terminar.
 
 O download escreve em um `.part` e só renomeia ao concluir, então uma queda de
 conexão não deixa para trás um arquivo truncado com o nome definitivo. Se o
 arquivo já existir localmente, o app pergunta antes de baixar de novo.
+
+### Por que a nuvem responde rápido
+
+O `PROPFIND` do Nextcloud custa caro, e quatro decisões atacam essa espera:
+
+| Decisão | Efeito |
+|---|---|
+| Conexão HTTP persistente | O `urllib` abre socket novo e manda `Connection: close` a cada chamada; aqui a conexão fica de pé e uma queda por ociosidade é refeita sozinha. Vários cliques, um handshake TLS. |
+| `PROPFIND` dirigido | Pede só `resourcetype`, `getcontentlength` e `getlastmodified`. Sem corpo, o pedido equivale a `allprop` e o servidor monta todas as propriedades de todos os filhos. |
+| Cache compartilhado por caminho | As duas abas veem a mesma pasta e só diferem no filtro de extensão — o cache guarda a listagem crua e as duas aproveitam a mesma busca. |
+| Exibir do cache e atualizar por baixo | Pasta já visitada aparece na hora; a atualização acontece em silêncio. Se ela falhar, o que está na tela continua valendo, com o aviso na barra de status. |
+
+Além disso, a raiz da nuvem é listada em segundo plano no arranque do app, de
+modo que o painel normalmente abre já preenchido. Só o que nunca foi visitado
+paga a ida ao servidor.
 
 ---
 

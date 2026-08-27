@@ -1,4 +1,18 @@
-"""Cliente WebDAV reutilizável com cache integrado para Nextcloud."""
+"""Cliente WebDAV reutilizável com cache integrado para Nextcloud.
+
+Três decisões guiam este módulo, todas voltadas à espera que o usuário sente
+ao abrir e navegar no painel da nuvem:
+
+1. A conexão é reaproveitada entre listagens. O `urllib` abre um socket novo
+   e manda `Connection: close` a cada chamada, então cada clique pagava DNS,
+   TCP e handshake TLS de novo. Aqui a `http.client.HTTPSConnection` fica de
+   pé, e uma conexão derrubada pelo servidor é refeita de forma transparente.
+2. O PROPFIND pede só as três propriedades usadas. Sem corpo, o servidor
+   monta e envia todas as propriedades de todos os filhos da pasta.
+3. O cache guarda a listagem crua por caminho e pode ser compartilhado entre
+   clientes, então as abas Versões e Backups não buscam a mesma pasta duas
+   vezes só por filtrarem extensões diferentes.
+"""
 
 import urllib.request
 import urllib.parse
@@ -6,7 +20,9 @@ import urllib.error
 import base64
 import collections
 import email.utils
+import http.client
 import os
+import threading
 import time
 import xml.etree.ElementTree as ET
 import logging
@@ -15,9 +31,28 @@ logger = logging.getLogger(__name__)
 
 NAMESPACES = {'d': 'DAV:'}
 
+TIMEOUT = 15
+
+# Só o que a listagem realmente usa. Um PROPFIND sem corpo equivale a
+# `allprop`: o servidor monta e devolve tudo, e o parser joga fora.
+CORPO_PROPFIND = (
+    '<?xml version="1.0" encoding="utf-8"?>'
+    '<d:propfind xmlns:d="DAV:">'
+    '<d:prop>'
+    '<d:resourcetype/>'
+    '<d:getcontentlength/>'
+    '<d:getlastmodified/>'
+    '</d:prop>'
+    '</d:propfind>'
+).encode('utf-8')
+
 # Um arquivo listado na nuvem. `tamanho` e `modificado` já vêm prontos para
-# exibição — o PROPFIND devolve os dois de graça, junto com o nome.
+# exibição — o PROPFIND devolve os dois junto com o nome.
 ArquivoRemoto = collections.namedtuple('ArquivoRemoto', 'nome tamanho modificado')
+
+
+class ErroWebDAV(Exception):
+    """Falha reportada pelo próprio servidor WebDAV."""
 
 
 def formatar_tamanho(bytes_):
@@ -54,18 +89,25 @@ def _texto_da_prop(prop, nome):
 class WebDAVClient:
     """Cliente WebDAV com cache para navegação e download de arquivos Nextcloud."""
 
-    def __init__(self, url, usuario='', senha='', cache_ttl=120):
+    def __init__(self, url, usuario='', senha='', cache_ttl=600, cache=None):
         """Inicializa o cliente WebDAV.
 
         Args:
             url: URL base do Nextcloud (ex: https://cloud.maxdata.com.br).
             usuario: Usuário para autenticação Basic.
             senha: Senha para autenticação Basic.
-            cache_ttl: Tempo de vida do cache em segundos (default: 120).
+            cache_ttl: Segundos até a listagem ser considerada vencida. Vencida
+                ela ainda é exibida — quem chama decide atualizar em segundo
+                plano (ver `consultar_cache`).
+            cache: Dicionário de cache a compartilhar com outro cliente. Sem
+                ele, cada instância mantém o seu.
         """
         self.cache_ttl = cache_ttl
-        self._cache = {}  # {(path, extensoes): (timestamp, pastas, arquivos)}
+        # {caminho: (timestamp, pastas, arquivos_sem_filtro)}
+        self._cache = cache if cache is not None else {}
         self.caminho_atual = '/'
+        self._conn = None
+        self._lock = threading.Lock()
         self.reconfigurar(url, usuario, senha)
 
     def reconfigurar(self, url, usuario, senha):
@@ -77,7 +119,46 @@ class WebDAVClient:
         self.url = url.rstrip('/') if url else ''
         self.usuario = usuario
         self.senha = senha
+        # O host pode ter mudado; uma listagem em curso na conexão antiga
+        # falha e o retry a refaz já com os dados novos.
+        self._fechar()
         self.limpar_cache()
+
+    # --- Conexão ---------------------------------------------------------
+    def _partes(self):
+        """Divide a URL configurada em (esquema, host, prefixo de caminho)."""
+        url = self.url if self.url.startswith('http') else 'https://' + self.url
+        partes = urllib.parse.urlsplit(url)
+        return partes.scheme or 'https', partes.netloc, partes.path.rstrip('/')
+
+    def _caminho_webdav(self, path):
+        """Caminho absoluto do recurso dentro do host (sem esquema nem host)."""
+        _, _, prefixo = self._partes()
+        return prefixo + "/remote.php/webdav" + urllib.parse.quote(path)
+
+    def _webdav_url(self, path):
+        """URL WebDAV completa — usada pelo download, que vai pelo urllib."""
+        esquema, host, _ = self._partes()
+        return f"{esquema}://{host}{self._caminho_webdav(path)}"
+
+    def _conexao(self):
+        """Conexão persistente, criada sob demanda."""
+        if self._conn is None:
+            esquema, host, _ = self._partes()
+            classe = (http.client.HTTPSConnection if esquema == 'https'
+                      else http.client.HTTPConnection)
+            self._conn = classe(host, timeout=TIMEOUT)
+            logger.debug("Nova conexão WebDAV para %s", host)
+        return self._conn
+
+    def _fechar(self):
+        """Descarta a conexão persistente, se houver."""
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except OSError:
+                pass
+            self._conn = None
 
     def _auth_header(self):
         """Retorna header de autenticação Basic ou None."""
@@ -88,54 +169,55 @@ class WebDAVClient:
             return f"Basic {auth}"
         return None
 
-    def _webdav_url(self, path):
-        """Monta a URL WebDAV completa para um caminho."""
-        url = self.url
-        if not url.startswith('http'):
-            url = 'https://' + url
-        return url + "/remote.php/webdav" + urllib.parse.quote(path)
-
     def _requisicao(self, path, metodo='GET'):
-        """Monta uma Request já autenticada para um caminho."""
+        """Monta uma Request urllib já autenticada (usada no download)."""
         req = urllib.request.Request(self._webdav_url(path), method=metodo)
         auth = self._auth_header()
         if auth:
             req.add_header("Authorization", auth)
         return req
 
-    def listar(self, path=None, force_refresh=False, extensoes=('.rar',)):
-        """Lista pastas e arquivos em um caminho WebDAV.
+    def _propfind(self, path):
+        """Executa o PROPFIND e devolve o XML cru.
 
-        Args:
-            path: Caminho a listar (default: caminho_atual).
-            force_refresh: Ignora cache e força nova requisição.
-            extensoes: Tupla de extensões de arquivo a incluir (case-insensitive).
-
-        Returns:
-            Tupla (pastas: list[str], arquivos: list[ArquivoRemoto]).
-
-        Raises:
-            Exception: Se a conexão WebDAV falhar.
+        Tenta duas vezes: servidores fecham conexão ociosa sem avisar, e a
+        falha só aparece quando a próxima requisição é enviada nela.
         """
-        if path is None:
-            path = self.caminho_atual
+        cabecalhos = {
+            "Depth": "1",
+            "Content-Type": 'text/xml; charset="utf-8"',
+        }
+        auth = self._auth_header()
+        if auth:
+            cabecalhos["Authorization"] = auth
 
-        # Verificar cache
-        cache_key = (path, extensoes)
-        if not force_refresh and cache_key in self._cache:
-            cached_time, pastas, arquivos = self._cache[cache_key]
-            if time.time() - cached_time < self.cache_ttl:
-                logger.debug("Cache hit para '%s'", path)
-                return pastas, arquivos
+        caminho = self._caminho_webdav(path)
 
-        # Requisição PROPFIND
-        logger.info("WebDAV PROPFIND: %s", path)
-        req = self._requisicao(path, metodo='PROPFIND')
-        req.add_header("Depth", "1")
+        with self._lock:
+            for tentativa in (1, 2):
+                try:
+                    conexao = self._conexao()
+                    conexao.request("PROPFIND", caminho,
+                                    body=CORPO_PROPFIND, headers=cabecalhos)
+                    resposta = conexao.getresponse()
+                    # O corpo precisa ser drenado antes de reusar a conexão
+                    dados = resposta.read()
+                except (OSError, http.client.HTTPException) as e:
+                    self._fechar()
+                    if tentativa == 2:
+                        raise
+                    logger.debug("Conexão reaproveitada caiu (%s); refazendo", e)
+                    continue
 
-        with urllib.request.urlopen(req, timeout=10) as response:
-            xml_data = response.read()
+                if resposta.status == 401:
+                    raise ErroWebDAV("Credenciais recusadas (HTTP 401).")
+                if resposta.status >= 400:
+                    raise ErroWebDAV(f"HTTP {resposta.status} {resposta.reason}")
+                return dados
 
+    @staticmethod
+    def _interpretar(xml_data):
+        """Converte a resposta do PROPFIND em (pastas, arquivos)."""
         root = ET.fromstring(xml_data)
         pastas = []
         arquivos = []
@@ -164,7 +246,7 @@ class WebDAVClient:
 
             if is_collection:
                 pastas.append(nome_item)
-            elif extensoes and nome_item.lower().endswith(extensoes):
+            else:
                 arquivos.append(ArquivoRemoto(
                     nome=nome_item,
                     tamanho=formatar_tamanho(_texto_da_prop(prop, 'getcontentlength')),
@@ -173,15 +255,79 @@ class WebDAVClient:
 
         pastas.sort()
         arquivos.sort(key=lambda a: a.nome, reverse=True)
-
-        # Guardar no cache
-        self._cache[cache_key] = (time.time(), pastas, arquivos)
-        logger.info("WebDAV listou %d pastas, %d arquivos em '%s'", len(pastas), len(arquivos), path)
-
         return pastas, arquivos
+
+    # --- Cache -----------------------------------------------------------
+    @staticmethod
+    def _filtrar(arquivos, extensoes):
+        """Aplica o filtro de extensão sobre a listagem guardada."""
+        if not extensoes:
+            return list(arquivos)
+        return [a for a in arquivos if a.nome.lower().endswith(extensoes)]
+
+    def consultar_cache(self, path=None, extensoes=('.rar',)):
+        """Listagem já em cache, mesmo vencida.
+
+        Permite à UI desenhar a lista na hora e só então decidir se atualiza
+        em segundo plano — mostrar dados de dez minutos atrás é melhor que
+        mostrar uma tela vazia por três segundos.
+
+        Returns:
+            Tupla (pastas, arquivos, vencido: bool), ou None se este caminho
+            nunca foi listado.
+        """
+        if path is None:
+            path = self.caminho_atual
+        entrada = self._cache.get(path)
+        if entrada is None:
+            return None
+        momento, pastas, todos = entrada
+        vencido = (time.time() - momento) >= self.cache_ttl
+        return pastas, self._filtrar(todos, extensoes), vencido
+
+    def listar(self, path=None, force_refresh=False, extensoes=('.rar',)):
+        """Lista pastas e arquivos em um caminho WebDAV.
+
+        Args:
+            path: Caminho a listar (default: caminho_atual).
+            force_refresh: Ignora cache e força nova requisição.
+            extensoes: Tupla de extensões de arquivo a incluir (case-insensitive).
+
+        Returns:
+            Tupla (pastas: list[str], arquivos: list[ArquivoRemoto]).
+
+        Raises:
+            ErroWebDAV, OSError: Se a conexão ou o servidor falharem.
+        """
+        if path is None:
+            path = self.caminho_atual
+
+        if not force_refresh:
+            entrada = self._cache.get(path)
+            if entrada is not None:
+                momento, pastas, todos = entrada
+                if time.time() - momento < self.cache_ttl:
+                    logger.debug("Cache hit para '%s'", path)
+                    return pastas, self._filtrar(todos, extensoes)
+
+        logger.info("WebDAV PROPFIND: %s", path)
+        pastas, todos = self._interpretar(self._propfind(path))
+
+        # Guardado sem filtro: as duas abas compartilham este cache e só
+        # divergem nas extensões que exibem.
+        self._cache[path] = (time.time(), pastas, todos)
+        logger.info("WebDAV listou %d pastas, %d arquivos em '%s'",
+                    len(pastas), len(todos), path)
+
+        return pastas, self._filtrar(todos, extensoes)
 
     def download(self, arquivo, destino_dir, on_progress=None):
         """Baixa um arquivo do WebDAV para um diretório local.
+
+        Vai pelo urllib, em conexão própria: o download ocupa o socket por
+        minutos, e prendê-lo na conexão das listagens travaria a navegação.
+        O ganho do keep-alive aqui seria irrelevante perto do tempo de
+        transferência.
 
         Escreve em um `.part` e só renomeia para o nome final ao terminar: uma
         queda de conexão no meio de um .rar de 150 MB deixava um arquivo
@@ -211,7 +357,7 @@ class WebDAVClient:
 
         baixado = 0
         try:
-            with urllib.request.urlopen(req, timeout=15) as response, \
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as response, \
                     open(parcial, 'wb') as out_file:
                 tamanho_total = response.getheader('content-length')
                 tamanho_total = int(tamanho_total) if tamanho_total else None
@@ -238,6 +384,8 @@ class WebDAVClient:
                 logger.warning("Não foi possível remover o parcial '%s': %s", parcial, e)
             raise
 
+        # O arquivo novo muda a listagem desta pasta
+        self._cache.pop(self.caminho_atual, None)
         logger.info("Download concluído: %s (%d bytes)", arquivo, baixado)
         return caminho_local
 
@@ -263,3 +411,7 @@ class WebDAVClient:
         """Limpa todo o cache."""
         self._cache.clear()
         logger.debug("Cache WebDAV limpo")
+
+    def fechar(self):
+        """Encerra a conexão persistente (usado ao fechar o app)."""
+        self._fechar()
