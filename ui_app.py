@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import W, E, END, BOTH, YES, NO, X, Y, LEFT, RIGHT, FLAT, BOTTOM
 from tkinter import ttk, messagebox, simpledialog
 import ttkbootstrap as bstrap
+import dataclasses
 import os
 import threading
 import queue
@@ -15,7 +16,7 @@ from app_config import (
     EXTENSOES_VERSAO, EXTENSOES_BACKUP, EXTENSOES_BACKUP_NUVEM,
 )
 from ini_service import IniService
-from sql_service import SqlService
+from sql_service import SqlService, descrever_erro, sugerir_nome_banco
 from webdav_client import WebDAVClient
 import sevenzip
 import ui_theme
@@ -23,7 +24,11 @@ from ui_widgets import RoundedButton
 
 logger = logging.getLogger(__name__)
 
-CLOUD_PANEL_WIDTH = 330
+# Largura suficiente para nome + tamanho + data na listagem da nuvem
+CLOUD_PANEL_WIDTH = 440
+
+# Prefixo das mensagens de percentual que trafegam pela fila do restore
+PREFIXO_PERCENTUAL = "__PCT__"
 
 
 class GerenciadorMaxApp(bstrap.Window):
@@ -54,6 +59,7 @@ class GerenciadorMaxApp(bstrap.Window):
         self._all_dbs = []
         self._cloud_visivel = False
         self._nuvem_carregada = set()   # id(treeview) das abas já listadas
+        self._nome_sugerido = ""        # última sugestão de nome de banco
 
         # WebDAV clients (um para versões, outro para backups)
         self.webdav_versoes = WebDAVClient(
@@ -239,10 +245,14 @@ class GerenciadorMaxApp(bstrap.Window):
         f_tools.pack(fill=BOTH, expand=YES, pady=(14, 0))
         self._rotulo(f_tools, "Ferramentas", estilo="CardTitle.TLabel", pady=(0, 10))
 
-        # Empacotado antes da lista para reservar sua altura: com a lista
+        # Empacotados antes da lista para reservar sua altura: com a lista
         # em expand=YES, o que vem depois seria espremido a zero.
+        # Com side=BOTTOM o primeiro empacotado fica embaixo, então o botão
+        # perigoso vai primeiro e o de backup se acomoda acima dele.
         self._botao(f_tools, "Excluir Banco(s)", self._drop_database,
                     "outline-danger", side=BOTTOM, fill=X, pady=(10, 0))
+        self._botao(f_tools, "💾  Gerar Backup", self._gerar_backup,
+                    "primary", side=BOTTOM, fill=X, pady=(10, 0))
 
         self.var_busca_banco = tk.StringVar()
         self.var_busca_banco.trace_add("write", self._filtrar_bancos)
@@ -304,6 +314,7 @@ class GerenciadorMaxApp(bstrap.Window):
         self.lb_backups = self._tabela(
             card, "backup", "Arquivo de Backup (.BAK / .MAX)", height=14
         )
+        self.lb_backups.bind("<<TreeviewSelect>>", self._sugerir_nome_do_banco)
 
     # --- Rodapé -----------------------------------------------------------
     def _criar_rodape(self):
@@ -399,13 +410,17 @@ class GerenciadorMaxApp(bstrap.Window):
         wrapper.pack(fill=BOTH, expand=YES)
 
         tree = ttk.Treeview(
-            wrapper, columns=("tipo", "nome"), show="headings",
+            wrapper, columns=("tipo", "nome", "tamanho", "data"), show="headings",
             style="Claro.Treeview", height=18,
         )
         tree.heading("tipo", text="")
         tree.heading("nome", text="Nome", anchor=W)
+        tree.heading("tamanho", text="Tamanho", anchor=E)
+        tree.heading("data", text="Modificado", anchor=W)
         tree.column("tipo", width=30, stretch=NO, anchor="center")
         tree.column("nome", anchor=W, stretch=True)
+        tree.column("tamanho", width=70, stretch=NO, anchor=E)
+        tree.column("data", width=110, stretch=NO, anchor=W)
 
         self._scrollbar(wrapper, tree).pack(side=RIGHT, fill=Y)
         tree.pack(side=LEFT, fill=BOTH, expand=YES)
@@ -512,6 +527,13 @@ class GerenciadorMaxApp(bstrap.Window):
                     entry.config(show="•")
                 entry.pack(side=LEFT, fill=X, expand=YES)
 
+            # Nas duas seções que dependem de rede, testar aqui evita salvar
+            # no escuro e só descobrir o erro depois, em outra tela.
+            if ini_section in ('SQL_RESTORE', 'CLOUD'):
+                self._botao(f, "Testar conexão",
+                            lambda s=ini_section: self._testar_conexao(s),
+                            "outline", anchor=E, pady=(10, 0))
+
         self._botao(scroll_frame, "💾  Guardar",
                     lambda: self._salvar_config_aba(cfg_win),
                     "primary", pady=18, anchor=E)
@@ -545,6 +567,39 @@ class GerenciadorMaxApp(bstrap.Window):
             logger.error("Erro ao guardar configurações: %s", e)
             messagebox.showerror("Erro", f"Erro ao guardar: {e}")
 
+    def _testar_conexao(self, secao):
+        """Testa SQL ou nuvem com os valores digitados, sem precisar salvar antes."""
+        # Uma cópia da configuração recebe o conteúdo dos campos: testar o que
+        # já está salvo não ajudaria justamente quem está corrigindo os dados.
+        temp = dataclasses.replace(self.cfg)
+        for (sec, key), var in self.cfg_vars.items():
+            temp.set_campo(sec, key, var.get())
+
+        self.status.config(text="A testar conexão...")
+        threading.Thread(target=self._thread_testar, args=(secao, temp),
+                         daemon=True).start()
+
+    def _thread_testar(self, secao, temp):
+        """Executa o teste de conexão fora da thread da UI."""
+        try:
+            if secao == 'SQL_RESTORE':
+                servidor = SqlService(temp).testar_conexao()
+                ok = f"Conexão SQL bem-sucedida.\n\n{servidor}"
+            else:
+                cliente = WebDAVClient(temp.url_cloud, temp.usuario_cloud,
+                                       temp.senha_cloud)
+                pastas, _ = cliente.listar(path='/', extensoes=EXTENSOES_BACKUP_NUVEM)
+                ok = f"Conexão com a nuvem bem-sucedida.\n\n{len(pastas)} pasta(s) na raiz."
+
+            self._set_status("Teste de conexão concluído.")
+            self.after(0, lambda m=ok: messagebox.showinfo("Teste de Conexão", m))
+        except Exception as e:
+            logger.warning("Teste de conexão (%s) falhou: %s", secao, e)
+            motivo = descrever_erro(e)
+            self._set_status(f"Falha no teste: {motivo}")
+            self.after(0, lambda m=motivo: messagebox.showerror(
+                "Teste de Conexão", f"Falhou:\n\n{m}"))
+
     # =========================================================================
     # LÓGICA: FILTROS DE BUSCA
     # =========================================================================
@@ -573,8 +628,14 @@ class GerenciadorMaxApp(bstrap.Window):
     # =========================================================================
     # LÓGICA: SQL + INI
     # =========================================================================
-    def _atualizar_ui_sql(self, bancos, db_atual, versao):
-        """Atualiza os widgets de SQL com dados novos."""
+    def _atualizar_ui_sql(self, bancos, db_atual, versao, erro=None):
+        """Atualiza os widgets de SQL com dados novos.
+
+        Args:
+            erro: Mensagem legível quando a consulta falhou. Sem ela, uma lista
+                vazia significaria tanto "servidor fora do ar" quanto "nenhum
+                banco", e não dá para distinguir os dois olhando a tela.
+        """
         self.lbl_db_atual.config(text=db_atual)
         self.lbl_versao_sql.config(text=versao)
         self.combo_db['values'] = bancos
@@ -582,6 +643,14 @@ class GerenciadorMaxApp(bstrap.Window):
             self.combo_db.set(db_atual)
         self._all_dbs = bancos
         self._filtrar_bancos()
+
+        # O aviso vai no cabeçalho da lista, não como uma linha: uma linha de
+        # erro poderia ser selecionada e acabar no Excluir Banco(s).
+        if erro:
+            self.lb_tools.heading("banco", text="Bases de Dados — sem conexão")
+            self.status.config(text=f"SQL: {erro}")
+        else:
+            self.lb_tools.heading("banco", text="Bases de Dados")
 
     def _carregar_banco_atual_sql(self):
         """Lê o banco atual do max.ini e atualiza a UI."""
@@ -611,8 +680,13 @@ class GerenciadorMaxApp(bstrap.Window):
                     self.after(0, lambda v=vals: self.combo_instancia.set(v[0]))
 
         versao = self.sql.get_versao(atual)
-        bancos = self.sql.listar_bancos()
-        self.after(0, lambda: self._atualizar_ui_sql(bancos, atual, versao))
+        try:
+            bancos, erro = self.sql.listar_bancos(), None
+        except Exception as e:
+            logger.warning("Erro ao listar bancos: %s", e)
+            bancos, erro = [], descrever_erro(e)
+
+        self.after(0, lambda: self._atualizar_ui_sql(bancos, atual, versao, erro))
 
     def _preview_version(self, event):
         """Mostra a versão do banco selecionado no combo."""
@@ -696,7 +770,7 @@ class GerenciadorMaxApp(bstrap.Window):
             lbl_caminho.config(text=client.caminho_atual)
             for i in treeview.get_children():
                 treeview.delete(i)
-            treeview.insert("", END, values=("⏳", "A carregar..."))
+            treeview.insert("", END, values=("⏳", "A carregar...", "", ""))
 
         self.after(0, mostrar_carregando)
         self._set_status(f"Nuvem: a listar {client.caminho_atual}...")
@@ -708,11 +782,13 @@ class GerenciadorMaxApp(bstrap.Window):
                 for i in treeview.get_children():
                     treeview.delete(i)
                 for p in pastas:
-                    treeview.insert("", END, values=("📁", p))
+                    treeview.insert("", END, values=("📁", p, "", ""))
                 for a in arquivos:
-                    treeview.insert("", END, values=("📄", a))
+                    treeview.insert(
+                        "", END, values=("📄", a.nome, a.tamanho, a.modificado)
+                    )
                 if not pastas and not arquivos:
-                    treeview.insert("", END, values=("—", "(pasta vazia)"))
+                    treeview.insert("", END, values=("—", "(pasta vazia)", "", ""))
                 self.status.config(
                     text=f"Nuvem: {len(pastas)} pastas, {len(arquivos)} arquivos."
                 )
@@ -726,7 +802,7 @@ class GerenciadorMaxApp(bstrap.Window):
             def att_erro():
                 for i in treeview.get_children():
                     treeview.delete(i)
-                treeview.insert("", END, values=("⚠", f"Erro: {erro}"))
+                treeview.insert("", END, values=("⚠", f"Erro: {erro}", "", ""))
 
             self.after(0, att_erro)
             self._set_status(f"Erro WebDAV: {erro}")
@@ -745,7 +821,7 @@ class GerenciadorMaxApp(bstrap.Window):
         sel = treeview.selection()
         if not sel:
             return
-        tipo, nome = treeview.item(sel[0], "values")
+        tipo, nome = treeview.item(sel[0], "values")[:2]
 
         if tipo == "📁":
             client.navegar(nome)
@@ -768,7 +844,7 @@ class GerenciadorMaxApp(bstrap.Window):
         if not sel:
             messagebox.showinfo("Aviso", "Selecione um arquivo na lista da nuvem.")
             return
-        tipo, nome = treeview.item(sel[0], "values")
+        tipo, nome = treeview.item(sel[0], "values")[:2]
 
         # Só linhas de arquivo: exclui pastas e as linhas de estado
         # (a carregar / erro / pasta vazia).
@@ -780,13 +856,25 @@ class GerenciadorMaxApp(bstrap.Window):
             messagebox.showerror("Erro", f"Pasta de destino inexistente:\n{destino_dir}")
             return
 
-        if messagebox.askyesno("Baixar da Nuvem", f"Deseja baixar {nome} para o computador?"):
-            self.status.config(text=f"A iniciar download de {nome}...")
-            threading.Thread(
-                target=self._thread_download,
-                args=(client, nome, destino_dir, on_complete_callback),
-                daemon=True
-            ).start()
+        # Baixar de novo um .rar de 150 MB que já está no disco é o tipo de
+        # espera que dá para evitar perguntando antes.
+        if os.path.exists(os.path.join(destino_dir, nome)):
+            titulo = "Arquivo já existe"
+            pergunta = (f"'{nome}' já está em:\n{destino_dir}\n\n"
+                        f"Baixar de novo e substituir?")
+        else:
+            titulo = "Baixar da Nuvem"
+            pergunta = f"Deseja baixar {nome} para o computador?"
+
+        if not messagebox.askyesno(titulo, pergunta):
+            return
+
+        self.status.config(text=f"A iniciar download de {nome}...")
+        threading.Thread(
+            target=self._thread_download,
+            args=(client, nome, destino_dir, on_complete_callback),
+            daemon=True
+        ).start()
 
     def _thread_download(self, client, nome, destino_dir, on_complete_callback):
         """Thread de download WebDAV."""
@@ -987,15 +1075,54 @@ class GerenciadorMaxApp(bstrap.Window):
             self.entry_new_db.focus_set()
             return
 
+        # O RESTORE roda com REPLACE: sem esta pergunta, um nome repetido
+        # sobrescreve um banco existente sem qualquer aviso.
+        if any(new_db.lower() == db.lower() for db in self._all_dbs):
+            if not messagebox.askyesno(
+                "Banco já existe",
+                f"Já existe um banco chamado '{new_db}'.\n\n"
+                f"Continuar SUBSTITUI todo o conteúdo dele pelo backup "
+                f"selecionado. Prosseguir?"
+            ):
+                return
+
         self._mostrar_progresso(True)
+        self._limpar_log()
+        threading.Thread(target=self._restore_logic, args=(fname, new_db), daemon=True).start()
+
+    def _limpar_log(self):
+        """Esvazia o painel de log da coluna Restaurador."""
         self.log_txt.config(state='normal')
         self.log_txt.delete('1.0', END)
         self.log_txt.config(state='disabled')
-        threading.Thread(target=self._restore_logic, args=(fname, new_db), daemon=True).start()
+
+    def _sugerir_nome_do_banco(self, event=None):
+        """Preenche o nome do banco a partir do backup selecionado.
+
+        Só sobrescreve o campo se ele estiver vazio ou ainda contiver a
+        sugestão anterior — um nome digitado à mão nunca é descartado.
+        """
+        sel = self.lb_backups.selection()
+        if not sel:
+            return
+
+        atual = self.entry_new_db.get().strip()
+        if atual and atual != self._nome_sugerido:
+            return
+
+        fname = self.lb_backups.item(sel[0], "values")[0]
+        sugestao = sugerir_nome_banco(fname)
+        self.entry_new_db.delete(0, END)
+        self.entry_new_db.insert(0, sugestao)
+        self._nome_sugerido = sugestao
 
     def _mostrar_progresso(self, ativo):
         """Mostra/esconde a barra de progresso e trava o botão de restore."""
         if ativo:
+            # Volta ao modo indeterminado a cada operação: o percentual real só
+            # começa a chegar alguns segundos depois, quando o SQL Server passa
+            # a publicar o andamento.
+            self.progress.config(mode='indeterminate', maximum=100, value=0)
             self.progress.pack(fill=X, pady=(8, 0), before=self.log_wrap)
             self.progress.start()
             self.btn_restore.config(state='disabled')
@@ -1003,6 +1130,18 @@ class GerenciadorMaxApp(bstrap.Window):
             self.progress.stop()
             self.progress.pack_forget()
             self.btn_restore.config(state='normal')
+
+    def _progresso_percentual(self, pct):
+        """Fixa o percentual na barra, trocando para o modo determinado."""
+        if str(self.progress.cget('mode')) == 'indeterminate':
+            self.progress.stop()
+            self.progress.config(mode='determinate', maximum=100)
+        self.progress.config(value=pct)
+        self.status.config(text=f"Operação SQL em andamento... {pct:.0f}%")
+
+    def _publicar_percentual(self, pct):
+        """Envia o percentual pela fila, que é lida na thread da UI."""
+        self.msg_queue.put(f"{PREFIXO_PERCENTUAL}{pct:.1f}")
 
     def _restore_logic(self, fname, dbname):
         """Orquestra o restore usando SqlService."""
@@ -1013,12 +1152,56 @@ class GerenciadorMaxApp(bstrap.Window):
                 caminho_backup=self.cfg.caminho_base_backup,
                 pasta_sistema=self.cfg.pasta_do_sistema,
                 caminho_7zip=self.cfg.caminho_do_7zip,
-                on_message=self.msg_queue.put
+                on_message=self.msg_queue.put,
+                on_progress=self._publicar_percentual,
             )
             self.msg_queue.put("__DONE__")
         except Exception as e:
             logger.error("Erro no restore: %s", e)
             self.msg_queue.put(f"ERRO: {e}")
+            self.msg_queue.put("__ERROR__")
+
+    # =========================================================================
+    # LÓGICA: BACKUP
+    # =========================================================================
+    def _gerar_backup(self):
+        """Gera um .bak do banco selecionado (ou do banco atual) na pasta de backups."""
+        sel = self.lb_tools.selection()
+        if sel:
+            alvo = self.lb_tools.item(sel[0], "values")[0]
+        else:
+            alvo = self.lbl_db_atual.cget("text")
+
+        if not alvo or "ERRO" in alvo.upper() or "ENCONTRAD" in alvo.upper():
+            messagebox.showinfo(
+                "Aviso", "Selecione um banco na lista de Bases de Dados."
+            )
+            return
+
+        destino = self.cfg.caminho_base_backup
+        if not messagebox.askyesno(
+            "Gerar Backup",
+            f"Gerar backup do banco '{alvo}'?\n\nO .bak será salvo em:\n{destino}"
+        ):
+            return
+
+        self._mostrar_progresso(True)
+        self._limpar_log()
+        threading.Thread(target=self._thread_backup, args=(alvo, destino),
+                         daemon=True).start()
+
+    def _thread_backup(self, dbname, destino):
+        """Thread do BACKUP DATABASE."""
+        try:
+            self.msg_queue.put(f"--- Iniciando Backup: {dbname} ---")
+            caminho = self.sql.backup_database(
+                dbname, destino, on_progress=self._publicar_percentual
+            )
+            self.msg_queue.put(f"Backup gerado: {os.path.basename(caminho)}")
+            self.msg_queue.put("__DONE_BACKUP__")
+        except Exception as e:
+            logger.error("Erro no backup: %s", e)
+            self.msg_queue.put(f"ERRO: {descrever_erro(e)}")
             self.msg_queue.put("__ERROR__")
 
     def process_queue(self):
@@ -1030,9 +1213,16 @@ class GerenciadorMaxApp(bstrap.Window):
                     self._mostrar_progresso(False)
                     messagebox.showinfo("Sucesso", "Restore Concluído!")
                     threading.Thread(target=self._carregar_banco_atual_sql, daemon=True).start()
+                elif msg == "__DONE_BACKUP__":
+                    self._mostrar_progresso(False)
+                    messagebox.showinfo("Sucesso", "Backup concluído!")
+                    # O .bak cai na pasta de backups: a lista precisa vê-lo
+                    threading.Thread(target=self._load_backups, daemon=True).start()
                 elif msg == "__ERROR__":
                     self._mostrar_progresso(False)
                     messagebox.showerror("Erro", "Falhou. Veja o log.")
+                elif msg.startswith(PREFIXO_PERCENTUAL):
+                    self._progresso_percentual(float(msg[len(PREFIXO_PERCENTUAL):]))
                 else:
                     self.log_txt.config(state='normal')
                     self.log_txt.insert(END, msg + "\n")

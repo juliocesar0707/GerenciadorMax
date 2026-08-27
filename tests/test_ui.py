@@ -120,6 +120,124 @@ def test_janela_de_configuracoes_abre_com_todos_os_campos():
         apoio.destruir(app); amb.fechar()
 
 
+def test_sql_fora_do_ar_nao_se_confunde_com_lista_vazia():
+    """Antes, falha de conexao e "nenhum banco" davam a mesma tela vazia."""
+    amb = AmbienteFalso()
+    app = criar_app(amb)
+    try:
+        app._atualizar_ui_sql([], "Max_Teste", "---",
+                              erro="Login recusado: usuario ou senha do SQL incorretos.")
+        app.update()
+
+        assert "sem conexao" in app.lb_tools.heading("banco")["text"].replace("ã", "a")
+        assert "Login recusado" in app.status.cget("text")
+
+        # e volta ao normal quando a conexao volta
+        app._atualizar_ui_sql(["Max_A"], "Max_A", "2.4.152.101")
+        app.update()
+        assert app.lb_tools.heading("banco")["text"] == "Bases de Dados"
+    finally:
+        apoio.destruir(app); amb.fechar()
+
+
+def test_selecionar_backup_sugere_o_nome_do_banco():
+    amb = AmbienteFalso()
+    app = criar_app(amb)
+    try:
+        app._all_backups = ["MAX-Manager_FORTUP_10082026.MAX", "Max_CLIENTE_01092026.zip"]
+        app._filtrar_backups()
+        app.update()
+
+        filhos = app.lb_backups.get_children()
+        app.lb_backups.selection_set(filhos[0])
+        app.update()
+        assert app.entry_new_db.get() == "FORTUP", app.entry_new_db.get()
+
+        # trocar de backup troca a sugestao
+        app.lb_backups.selection_set(filhos[1])
+        app.update()
+        assert app.entry_new_db.get() == "CLIENTE", app.entry_new_db.get()
+    finally:
+        apoio.destruir(app); amb.fechar()
+
+
+def test_nome_digitado_a_mao_nao_e_sobrescrito():
+    amb = AmbienteFalso()
+    app = criar_app(amb)
+    try:
+        app._all_backups = ["MAX-Manager_FORTUP_10082026.MAX", "Max_CLIENTE_01092026.zip"]
+        app._filtrar_backups()
+        app.update()
+
+        from tkinter import END
+        app.entry_new_db.delete(0, END)
+        app.entry_new_db.insert(0, "NOME_MEU")
+
+        app.lb_backups.selection_set(app.lb_backups.get_children()[0])
+        app.update()
+
+        assert app.entry_new_db.get() == "NOME_MEU", "descartou o que foi digitado"
+    finally:
+        apoio.destruir(app); amb.fechar()
+
+
+def test_barra_troca_de_indeterminada_para_percentual():
+    amb = AmbienteFalso()
+    app = criar_app(amb)
+    try:
+        app._mostrar_progresso(True); app.update()
+        assert str(app.progress.cget("mode")) == "indeterminate"
+
+        app._progresso_percentual(42.0); app.update()
+        assert str(app.progress.cget("mode")) == "determinate"
+        assert float(app.progress.cget("value")) == 42.0
+        assert "42%" in app.status.cget("text"), app.status.cget("text")
+
+        # a operacao seguinte recomeca indeterminada
+        app._mostrar_progresso(False)
+        app._mostrar_progresso(True); app.update()
+        assert str(app.progress.cget("mode")) == "indeterminate"
+    finally:
+        apoio.destruir(app); amb.fechar()
+
+
+def test_percentual_chega_pela_fila_do_restore():
+    """O SQL reporta o progresso numa thread; a barra so pode ser tocada na
+    thread da UI, entao o valor viaja pela mesma fila do log."""
+    amb = AmbienteFalso()
+    app = criar_app(amb)
+    try:
+        app._mostrar_progresso(True)
+        app._publicar_percentual(73.4)
+        app.process_queue()
+        app.update()
+
+        assert str(app.progress.cget("mode")) == "determinate"
+        assert round(float(app.progress.cget("value"))) == 73
+    finally:
+        apoio.destruir(app); amb.fechar()
+
+
+def test_backup_sem_banco_valido_apenas_avisa():
+    amb = AmbienteFalso()
+    app = criar_app(amb)
+    try:
+        vistos = apoio.silenciar_dialogos(ui_app)
+        chamados = []
+        app.sql.backup_database = lambda *a, **k: chamados.append(a)
+
+        app.lbl_db_atual.config(text="INI NAO ENCONTRADO")
+        app.update()
+        app._gerar_backup()
+        app.update()
+
+        assert not chamados, "nao deveria tentar backup sem banco valido"
+        assert vistos["info"], "deveria avisar"
+    finally:
+        apoio.restaurar_dialogos(ui_app)
+        apoio.destruir(app); amb.fechar()
+
+
 def test_listas_locais_leem_do_disco():
     amb = AmbienteFalso()
     app = criar_app(amb)

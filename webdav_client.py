@@ -4,11 +4,51 @@ import urllib.request
 import urllib.parse
 import urllib.error
 import base64
+import collections
+import email.utils
+import os
 import time
 import xml.etree.ElementTree as ET
 import logging
 
 logger = logging.getLogger(__name__)
+
+NAMESPACES = {'d': 'DAV:'}
+
+# Um arquivo listado na nuvem. `tamanho` e `modificado` já vêm prontos para
+# exibição — o PROPFIND devolve os dois de graça, junto com o nome.
+ArquivoRemoto = collections.namedtuple('ArquivoRemoto', 'nome tamanho modificado')
+
+
+def formatar_tamanho(bytes_):
+    """Formata um tamanho em bytes para leitura humana ('1,4 GB')."""
+    if bytes_ is None:
+        return ''
+    valor = float(bytes_)
+    for unidade in ('B', 'KB', 'MB', 'GB', 'TB'):
+        if valor < 1024 or unidade == 'TB':
+            if unidade == 'B':
+                return f"{int(valor)} B"
+            return f"{valor:.1f} {unidade}".replace('.', ',')
+        valor /= 1024
+
+
+def formatar_data(texto):
+    """Converte a data RFC 1123 do WebDAV para 'dd/mm/aaaa hh:mm'."""
+    if not texto:
+        return ''
+    try:
+        return email.utils.parsedate_to_datetime(texto).strftime('%d/%m/%Y %H:%M')
+    except (TypeError, ValueError):
+        return ''
+
+
+def _texto_da_prop(prop, nome):
+    """Texto de uma propriedade do PROPFIND, ou None."""
+    if prop is None:
+        return None
+    elemento = prop.find(f'd:{nome}', NAMESPACES)
+    return elemento.text if elemento is not None else None
 
 
 class WebDAVClient:
@@ -24,7 +64,7 @@ class WebDAVClient:
             cache_ttl: Tempo de vida do cache em segundos (default: 120).
         """
         self.cache_ttl = cache_ttl
-        self._cache = {}  # {path: (timestamp, pastas, arquivos)}
+        self._cache = {}  # {(path, extensoes): (timestamp, pastas, arquivos)}
         self.caminho_atual = '/'
         self.reconfigurar(url, usuario, senha)
 
@@ -55,6 +95,14 @@ class WebDAVClient:
             url = 'https://' + url
         return url + "/remote.php/webdav" + urllib.parse.quote(path)
 
+    def _requisicao(self, path, metodo='GET'):
+        """Monta uma Request já autenticada para um caminho."""
+        req = urllib.request.Request(self._webdav_url(path), method=metodo)
+        auth = self._auth_header()
+        if auth:
+            req.add_header("Authorization", auth)
+        return req
+
     def listar(self, path=None, force_refresh=False, extensoes=('.rar',)):
         """Lista pastas e arquivos em um caminho WebDAV.
 
@@ -64,7 +112,7 @@ class WebDAVClient:
             extensoes: Tupla de extensões de arquivo a incluir (case-insensitive).
 
         Returns:
-            Tupla (pastas: list[str], arquivos: list[str]).
+            Tupla (pastas: list[str], arquivos: list[ArquivoRemoto]).
 
         Raises:
             Exception: Se a conexão WebDAV falhar.
@@ -82,13 +130,8 @@ class WebDAVClient:
 
         # Requisição PROPFIND
         logger.info("WebDAV PROPFIND: %s", path)
-        webdav_url = self._webdav_url(path)
-
-        req = urllib.request.Request(webdav_url, method='PROPFIND')
+        req = self._requisicao(path, metodo='PROPFIND')
         req.add_header("Depth", "1")
-        auth = self._auth_header()
-        if auth:
-            req.add_header("Authorization", auth)
 
         with urllib.request.urlopen(req, timeout=10) as response:
             xml_data = response.read()
@@ -96,33 +139,40 @@ class WebDAVClient:
         root = ET.fromstring(xml_data)
         pastas = []
         arquivos = []
-        namespaces = {'d': 'DAV:'}
 
         primeiro = True
-        for resp in root.findall('d:response', namespaces):
-            href = resp.find('d:href', namespaces).text
+        for resp in root.findall('d:response', NAMESPACES):
+            href = resp.find('d:href', NAMESPACES).text
             href = urllib.parse.unquote(href)
             nome_item = [p for p in href.split('/') if p][-1]
 
+            # A primeira resposta é o próprio diretório consultado
             if primeiro:
                 primeiro = False
                 continue
 
-            propstat = resp.find('d:propstat', namespaces)
-            if propstat:
-                prop = propstat.find('d:prop', namespaces)
-                resourcetype = prop.find('d:resourcetype', namespaces)
-                is_collection = (
-                    resourcetype is not None
-                    and resourcetype.find('d:collection', namespaces) is not None
-                )
-                if is_collection:
-                    pastas.append(nome_item)
-                elif extensoes and nome_item.lower().endswith(extensoes):
-                    arquivos.append(nome_item)
+            propstat = resp.find('d:propstat', NAMESPACES)
+            if propstat is None:
+                continue
+
+            prop = propstat.find('d:prop', NAMESPACES)
+            resourcetype = prop.find('d:resourcetype', NAMESPACES) if prop is not None else None
+            is_collection = (
+                resourcetype is not None
+                and resourcetype.find('d:collection', NAMESPACES) is not None
+            )
+
+            if is_collection:
+                pastas.append(nome_item)
+            elif extensoes and nome_item.lower().endswith(extensoes):
+                arquivos.append(ArquivoRemoto(
+                    nome=nome_item,
+                    tamanho=formatar_tamanho(_texto_da_prop(prop, 'getcontentlength')),
+                    modificado=formatar_data(_texto_da_prop(prop, 'getlastmodified')),
+                ))
 
         pastas.sort()
-        arquivos.sort(reverse=True)
+        arquivos.sort(key=lambda a: a.nome, reverse=True)
 
         # Guardar no cache
         self._cache[cache_key] = (time.time(), pastas, arquivos)
@@ -132,6 +182,11 @@ class WebDAVClient:
 
     def download(self, arquivo, destino_dir, on_progress=None):
         """Baixa um arquivo do WebDAV para um diretório local.
+
+        Escreve em um `.part` e só renomeia para o nome final ao terminar: uma
+        queda de conexão no meio de um .rar de 150 MB deixava um arquivo
+        truncado com o nome certo, que só falhava depois, na extração, com um
+        erro do 7-Zip que não apontava para o download.
 
         Args:
             arquivo: Nome do arquivo a baixar.
@@ -144,38 +199,44 @@ class WebDAVClient:
         Raises:
             Exception: Se o download falhar.
         """
-        import os
-
         path = self.caminho_atual
         if not path.endswith('/'):
             path += '/'
 
-        webdav_url = self._webdav_url(path + arquivo)
-
-        req = urllib.request.Request(webdav_url)
-        auth = self._auth_header()
-        if auth:
-            req.add_header("Authorization", auth)
+        req = self._requisicao(path + arquivo)
 
         caminho_local = os.path.join(destino_dir, arquivo)
+        parcial = caminho_local + '.part'
         logger.info("Download WebDAV: %s → %s", arquivo, caminho_local)
 
-        with urllib.request.urlopen(req, timeout=15) as response, \
-                open(caminho_local, 'wb') as out_file:
-            tamanho_total = response.getheader('content-length')
-            tamanho_total = int(tamanho_total) if tamanho_total else None
-            baixado = 0
-            bloco = 1024 * 64  # 64KB
+        baixado = 0
+        try:
+            with urllib.request.urlopen(req, timeout=15) as response, \
+                    open(parcial, 'wb') as out_file:
+                tamanho_total = response.getheader('content-length')
+                tamanho_total = int(tamanho_total) if tamanho_total else None
+                bloco = 1024 * 64  # 64KB
 
-            while True:
-                dados = response.read(bloco)
-                if not dados:
-                    break
-                out_file.write(dados)
-                baixado += len(dados)
-                if tamanho_total and on_progress:
-                    pct = int((baixado / tamanho_total) * 100)
-                    on_progress(pct)
+                while True:
+                    dados = response.read(bloco)
+                    if not dados:
+                        break
+                    out_file.write(dados)
+                    baixado += len(dados)
+                    if tamanho_total and on_progress:
+                        pct = int((baixado / tamanho_total) * 100)
+                        on_progress(pct)
+
+            os.replace(parcial, caminho_local)
+        except BaseException:
+            # Inclui KeyboardInterrupt e o fechamento da janela: em qualquer
+            # caso o .part não pode ficar para trás fingindo ser um download.
+            try:
+                if os.path.exists(parcial):
+                    os.remove(parcial)
+            except OSError as e:
+                logger.warning("Não foi possível remover o parcial '%s': %s", parcial, e)
+            raise
 
         logger.info("Download concluído: %s (%d bytes)", arquivo, baixado)
         return caminho_local

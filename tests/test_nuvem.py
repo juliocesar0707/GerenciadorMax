@@ -1,9 +1,14 @@
 """Painel da nuvem: estado visivel, gating de carga e troca de credenciais."""
+import os
+import tempfile
+
 import apoio
 from apoio import AmbienteFalso, criar_app, linhas
 
 from app_config import EXTENSOES_VERSAO
-from webdav_client import WebDAVClient
+from webdav_client import (
+    ArquivoRemoto, WebDAVClient, formatar_data, formatar_tamanho,
+)
 
 
 class ClienteQuebrado:
@@ -15,7 +20,8 @@ class ClienteQuebrado:
 class ClienteOk:
     caminho_atual = "/VERSOES/"
     def listar(self, **kw):
-        return (["v152", "v151"], ["a.rar"])
+        return (["v152", "v151"],
+                [ArquivoRemoto("a.rar", "12,3 MB", "10/08/2026 09:15")])
 
 
 class ClienteVazio:
@@ -72,6 +78,68 @@ def test_listagem_popula_e_marca_como_carregada():
         assert id(app.lb_nuvem_versoes) in app._nuvem_carregada
     finally:
         apoio.destruir(app); amb.fechar()
+
+
+def test_tamanho_e_data_aparecem_na_linha_do_arquivo():
+    """O PROPFIND ja devolve os dois; jogar fora obrigava a abrir a nuvem
+    no navegador so para conferir qual backup e o certo."""
+    amb = AmbienteFalso()
+    app = criar_app(amb)
+    try:
+        app._popular_nuvem(ClienteOk(), app.lb_nuvem_versoes,
+                           app.lbl_caminho_versoes, EXTENSOES_VERSAO)
+        app.update()
+
+        arquivo = [l for l in linhas(app.lb_nuvem_versoes) if l[0] == "\U0001f4c4"][0]
+        assert arquivo[1] == "a.rar", arquivo
+        assert arquivo[2] == "12,3 MB", arquivo
+        assert arquivo[3] == "10/08/2026 09:15", arquivo
+
+        # pastas nao tem tamanho nem data
+        pasta = [l for l in linhas(app.lb_nuvem_versoes) if l[0] == "\U0001f4c1"][0]
+        assert pasta[2] == "" and pasta[3] == "", pasta
+    finally:
+        apoio.destruir(app); amb.fechar()
+
+
+def test_formatacao_de_tamanho_e_data():
+    assert formatar_tamanho(0) == "0 B"
+    assert formatar_tamanho(512) == "512 B"
+    assert formatar_tamanho(1536) == "1,5 KB"
+    assert formatar_tamanho(155807877) == "148,6 MB"
+    assert formatar_tamanho(None) == ""
+
+    assert formatar_data("Mon, 10 Aug 2026 09:15:00 GMT") == "10/08/2026 09:15"
+    assert formatar_data("") == ""
+    assert formatar_data("data invalida") == ""
+
+
+def test_download_interrompido_nao_deixa_arquivo_com_nome_final():
+    """Uma queda no meio deixava um .rar truncado com o nome certo, que so
+    falhava depois, na extracao, com um erro do 7-Zip que nao explicava nada."""
+    import urllib.request
+
+    class RespostaQueCai:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def getheader(self, nome): return "1000"
+        def read(self, n): raise OSError("conexao perdida")
+
+    original = urllib.request.urlopen
+    urllib.request.urlopen = lambda *a, **k: RespostaQueCai()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            w = WebDAVClient("https://exemplo.com", "u", "s")
+            try:
+                w.download("versao.rar", d)
+            except OSError:
+                pass
+            else:
+                raise AssertionError("deveria propagar a falha")
+
+            assert os.listdir(d) == [], f"sobrou lixo: {os.listdir(d)}"
+    finally:
+        urllib.request.urlopen = original
 
 
 def test_pasta_vazia_tem_rotulo_explicito():

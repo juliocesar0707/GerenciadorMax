@@ -32,21 +32,41 @@ e a versão do sistema gravada no banco.
 
 - Troca a instância SQL Server (detectadas via registro do Windows).
 - Troca o banco ativo do cliente, gravando a chave no `max.ini`.
+- **Gera backup** do banco selecionado (ou do banco ativo, se nada estiver
+  selecionado) direto na pasta de backups, com data e hora no nome do arquivo.
+  Backups sucessivos do mesmo banco não se sobrescrevem, e o `.bak` já aparece
+  na lista do Restaurador ao terminar.
 - Exclui bancos de dados — múltipla seleção, com o banco atualmente em uso
   protegido e confirmação por digitação da palavra `EXCLUIR`.
+
+Quando o SQL Server não responde, a lista de bancos não fica apenas vazia: o
+cabeçalho passa a marcar "sem conexão" e a barra de status explica o motivo
+(login recusado, servidor inacessível, driver ausente).
 
 **Restaurador (coluna 3)** — lista os backups locais (`.max`, `.bak`, `.zip`,
 `.rar`) ordenados do mais recente para o mais antigo.
 
-Ao restaurar, o app extrai o arquivo se estiver compactado, localiza o `.MAX`/`.BAK`
-lá dentro, cria uma pasta `dados{N}` na pasta do sistema, descobre os nomes lógicos
-via `RESTORE FILELISTONLY` e executa o `RESTORE DATABASE` com `MOVE`. O progresso
-aparece em um log na própria coluna.
+Ao selecionar um backup, o nome do banco é sugerido a partir do nome do arquivo
+(`MAX-Manager_FORTUP_10082026.MAX` → `FORTUP`); um nome digitado à mão nunca é
+sobrescrito pela sugestão. Se o nome escolhido já pertencer a um banco existente,
+o app pergunta antes de continuar — o `RESTORE` roda com `REPLACE`.
+
+O restore extrai o arquivo se estiver compactado, localiza o `.MAX`/`.BAK` lá
+dentro, cria uma pasta `dados{N}` na pasta do sistema, descobre os nomes lógicos
+via `RESTORE FILELISTONLY` e executa o `RESTORE DATABASE` com `MOVE`. A barra de
+progresso mostra o **percentual real** publicado pelo SQL Server em
+`sys.dm_exec_requests` — sem a permissão `VIEW SERVER STATE` ela simplesmente
+segue indeterminada. As mensagens de etapa aparecem no log da própria coluna.
 
 **Cloud Maxdata (painel lateral)** — navegador WebDAV do Nextcloud com abas
-separadas para Versões e Backups. Navega nas pastas, baixa o arquivo selecionado
-para a pasta local correspondente e atualiza a lista local ao terminar. As
-listagens ficam em cache por 2 minutos, já que o `PROPFIND` do Nextcloud é lento.
+separadas para Versões e Backups, mostrando nome, tamanho e data de modificação
+de cada arquivo. Navega nas pastas, baixa o selecionado para a pasta local
+correspondente e atualiza a lista local ao terminar. As listagens ficam em cache
+por 2 minutos, já que o `PROPFIND` do Nextcloud é lento.
+
+O download escreve em um `.part` e só renomeia ao concluir, então uma queda de
+conexão não deixa para trás um arquivo truncado com o nome definitivo. Se o
+arquivo já existir localmente, o app pergunta antes de baixar de novo.
 
 ---
 
@@ -91,6 +111,10 @@ Os caminhos são validados a cada inicialização; se algum não existir, o app 
 tela de correção antes de montar a interface. O botão `⚙ Configurações` no rodapé
 edita todos os campos.
 
+As seções **SQL Restore** e **Cloud Nuvem** têm um botão `Testar conexão` que usa
+os valores digitados na hora, sem precisar salvar antes — útil justamente quando
+se está corrigindo credenciais.
+
 | Seção | Conteúdo |
 |---|---|
 | `CAMINHOS` | Pasta do sistema, versões, backups, `max.ini` e `7z.exe` |
@@ -126,9 +150,10 @@ python tests/run_all.py
 |---|---|
 | `test_config.py` | Ofuscação, ancoragem do `.ini` na pasta do app, tela de setup |
 | `test_launcher.py` | Fluxos de Abrir Sistema e Atualizar Sistema, com o 7-Zip e o `Popen` interceptados |
-| `test_nuvem.py` | Painel WebDAV: falha de rede, pasta vazia, troca de credenciais |
+| `test_nuvem.py` | Painel WebDAV: falha de rede, pasta vazia, troca de credenciais, tamanho/data, download interrompido |
 | `test_sevenzip.py` | Diagnóstico das falhas do 7-Zip e detecção de executável em uso |
-| `test_ui.py` | Montagem da janela, filtros das três listas, barra de progresso |
+| `test_sql.py` | Sugestão de nome de banco, escape de apóstrofo e de senha, tradução dos erros do ODBC |
+| `test_ui.py` | Montagem da janela, filtros das três listas, barra de progresso, sugestão de nome, SQL fora do ar |
 
 Um teste do `test_sevenzip.py` roda o 7-Zip de verdade e se pula sozinho quando
 ele não está instalado.
