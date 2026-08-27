@@ -295,7 +295,7 @@ class GerenciadorMaxApp(bstrap.Window):
         f_acoes = bstrap.Frame(self.col_right)
         f_acoes.pack(side=BOTTOM, fill=X, pady=(12, 0))
 
-        self._rotulo(f_acoes, "Nome do Banco (Sem Max_):",
+        self._rotulo(f_acoes, "Nome do Banco:",
                      estilo="Muted.TLabel", pady=(0, 4))
         self.entry_new_db = self._entrada_clara(f_acoes)
         self.entry_new_db.pack(fill=X, pady=(0, 8))
@@ -335,7 +335,7 @@ class GerenciadorMaxApp(bstrap.Window):
         self._entrada_clara(card, self.var_busca_backup).pack(fill=X, pady=(0, 10))
 
         self.lb_backups = self._tabela(
-            card, "backup", "Arquivo de Backup (.BAK / .MAX)", height=14
+            card, "backup", "Arquivo de Backup (.BAK / .MAX / .ZIP)", height=14
         )
         self.lb_backups.bind("<<TreeviewSelect>>", self._sugerir_nome_do_banco)
 
