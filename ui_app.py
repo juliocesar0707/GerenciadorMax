@@ -6,6 +6,7 @@ from tkinter import ttk, messagebox, simpledialog
 import ttkbootstrap as bstrap
 import dataclasses
 import os
+import re
 import threading
 import queue
 import subprocess
@@ -29,6 +30,12 @@ CLOUD_PANEL_WIDTH = 440
 
 # Prefixo das mensagens de percentual que trafegam pela fila do restore
 PREFIXO_PERCENTUAL = "__PCT__"
+
+# Texto do banco atual enquanto o SQL não respondeu
+TEXTO_CARREGANDO = "Carregando..."
+
+# Dica do painel de log do Restaurador, enquanto nenhuma operação rodou
+DICA_LOG = "O andamento do backup e do restore aparece aqui."
 
 
 class GerenciadorMaxApp(bstrap.Window):
@@ -58,6 +65,7 @@ class GerenciadorMaxApp(bstrap.Window):
         self._all_backups = []
         self._all_dbs = []
         self._cloud_visivel = False
+        self._largura_nuvem = 0         # quanto a janela alargou ao abrir a nuvem
         self._nuvem_carregada = set()   # id(treeview) das abas já listadas
         self._nome_sugerido = ""        # última sugestão de nome de banco
 
@@ -87,7 +95,7 @@ class GerenciadorMaxApp(bstrap.Window):
 
     def _carregamento_assincrono(self):
         """Carrega dados em background (SQL + arquivos locais)."""
-        self._set_status("A carregar base de dados e ficheiros locais...")
+        self._set_status("Carregando bancos e arquivos locais...")
         self._popular_versoes_locais()
         self._load_backups()
         self._carregar_banco_atual_sql()
@@ -179,12 +187,52 @@ class GerenciadorMaxApp(bstrap.Window):
         """Campo de texto branco com borda suave, como no login do MaxManager."""
         return ttk.Entry(parent, textvariable=textvariable, style="Campo.TEntry")
 
+    def _campo_busca(self, parent, variavel, dica):
+        """Campo de busca com texto de dica enquanto está vazio.
+
+        Sem a dica eram três caixas vazias no topo das colunas, sem nada que
+        dissesse para que serviam. O Tk não tem placeholder: a dica é um
+        rótulo sobreposto ao campo, e não texto dentro dele — senão a própria
+        dica entraria no filtro da lista.
+        """
+        entry = self._entrada_clara(parent, variavel)
+        lbl = tk.Label(entry, text=dica, font=(ui_theme.FONT_FAMILY, 9),
+                       cursor="xterm")
+        # Cores só depois de criar: o ttkbootstrap repinta os widgets tk
+        # clássicos na construção e ignoraria o que fosse passado ali.
+        lbl.configure(bg=ui_theme.CARD, fg=ui_theme.FG_MUTED)
+        lbl.bind("<Button-1>", lambda e: entry.focus_set())
+
+        def atualizar(*_):
+            if variavel.get():
+                lbl.place_forget()
+            else:
+                lbl.place(x=10, rely=0.5, anchor=W)
+
+        variavel.trace_add("write", atualizar)
+        atualizar()
+        return entry
+
     @staticmethod
     def _scrollbar(parent, widget):
-        """Scrollbar discreta acoplada a um treeview ou text."""
+        """Scrollbar discreta acoplada a um treeview ou text.
+
+        Some quando todo o conteúdo cabe: uma barra cinza ao lado de uma lista
+        de três itens só ocupa espaço. Quem chama a empacota normalmente; o
+        primeiro ajuste já a esconde se ela não for necessária.
+        """
         sb = bstrap.Scrollbar(parent, command=widget.yview,
                               bootstyle="secondary-round")
-        widget.config(yscrollcommand=sb.set)
+
+        def ajustar(inicio, fim):
+            sb.set(inicio, fim)
+            precisa = float(inicio) > 0 or float(fim) < 1
+            if precisa and not sb.winfo_manager():
+                sb.pack(side=RIGHT, fill=Y, before=widget)
+            elif not precisa and sb.winfo_manager():
+                sb.pack_forget()
+
+        widget.config(yscrollcommand=ajustar)
         return sb
 
     def _tabela(self, parent, coluna_id, cabecalho, height=12, selectmode="browse"):
@@ -205,6 +253,15 @@ class GerenciadorMaxApp(bstrap.Window):
 
         self._scrollbar(wrapper, tree).pack(side=RIGHT, fill=Y)
         tree.pack(side=LEFT, fill=BOTH, expand=YES)
+
+        # Clicar no espaço vazio da lista desfaz a seleção — sem isso não havia
+        # como voltar ao "nada selecionado", e Abrir Sistema e Gerar Backup
+        # mudam de comportamento conforme a seleção.
+        def desmarcar(event):
+            if not tree.identify_row(event.y):
+                tree.selection_remove(tree.selection())
+        tree.bind("<Button-1>", desmarcar, add="+")
+        tree.bind("<Escape>", lambda e: tree.selection_remove(tree.selection()))
         return tree
 
     # --- Coluna 1: Manager -----------------------------------------------
@@ -214,12 +271,14 @@ class GerenciadorMaxApp(bstrap.Window):
 
         f_btn = bstrap.Frame(self.col_left)
         f_btn.pack(side=BOTTOM, fill=X, pady=(12, 0))
-        self._botao(f_btn, "▶  Abrir Sistema", self._lancar_erp,
-                    "primary", fill=X, pady=(0, 6))
+        self.btn_abrir = self._botao(f_btn, "▶  Abrir Sistema", self._lancar_erp,
+                                     "primary", fill=X, pady=(0, 6))
         self._botao(f_btn, "⚡  Atualizar Sistema", self._lancar_atualizacao,
                     "outline", fill=X, pady=(0, 6))
+        # ⟳ e não 🔄: o Tk no Windows não desenha emoji colorido, e o 🔄
+        # aparecia como um quadradinho.
         self._botao(
-            f_btn, "🔄  Recarregar Lista",
+            f_btn, "⟳  Recarregar Lista",
             lambda: threading.Thread(
                 target=self._popular_versoes_locais, daemon=True).start(),
             "outline", fill=X,
@@ -230,10 +289,12 @@ class GerenciadorMaxApp(bstrap.Window):
 
         self.var_busca_versao = tk.StringVar()
         self.var_busca_versao.trace_add("write", self._filtrar_versoes)
-        self._entrada_clara(card, self.var_busca_versao).pack(fill=X, pady=(0, 10))
+        self._campo_busca(card, self.var_busca_versao, "Buscar versão...").pack(
+            fill=X, pady=(0, 10))
 
         self.lb_versoes = self._tabela(card, "versao", "Versões Locais", height=16)
         self.lb_versoes.bind("<Double-1>", lambda e: self._lancar_atualizacao())
+        self.lb_versoes.bind("<<TreeviewSelect>>", self._atualizar_botao_abrir)
 
     # --- Coluna 2: Info Base ---------------------------------------------
     def _setup_col_center(self):
@@ -244,7 +305,7 @@ class GerenciadorMaxApp(bstrap.Window):
         card.pack(fill=X)
 
         self._rotulo(card, "Banco Atual:")
-        self.lbl_db_atual = ttk.Label(card, text="A carregar...", style="CardValue.TLabel")
+        self.lbl_db_atual = ttk.Label(card, text=TEXTO_CARREGANDO, style="CardValue.TLabel")
         self.lbl_db_atual.pack(anchor=W, pady=(0, 12))
 
         self._rotulo(card, "Servidor:")
@@ -274,15 +335,18 @@ class GerenciadorMaxApp(bstrap.Window):
         # perigoso vai primeiro e o de backup se acomoda acima dele.
         self._botao(f_tools, "Excluir Banco(s)", self._drop_database,
                     "outline-danger", side=BOTTOM, fill=X, pady=(10, 0))
-        self._botao(f_tools, "💾  Gerar Backup", self._gerar_backup,
-                    "primary", side=BOTTOM, fill=X, pady=(10, 0))
+        self.btn_backup = self._botao(
+            f_tools, "💾  Gerar Backup", self._gerar_backup,
+            "primary", side=BOTTOM, fill=X, pady=(10, 0),
+        )
 
         self.var_busca_banco = tk.StringVar()
         self.var_busca_banco.trace_add("write", self._filtrar_bancos)
-        self._entrada_clara(f_tools, self.var_busca_banco).pack(fill=X, pady=(0, 8))
+        self._campo_busca(f_tools, self.var_busca_banco, "Buscar banco...").pack(
+            fill=X, pady=(0, 8))
 
         self.lb_tools = self._tabela(
-            f_tools, "banco", "Bases de Dados", height=7, selectmode="extended"
+            f_tools, "banco", "Bancos de Dados", height=7, selectmode="extended"
         )
 
     # --- Coluna 3: Restaurador -------------------------------------------
@@ -327,16 +391,25 @@ class GerenciadorMaxApp(bstrap.Window):
         self._scrollbar(log_wrap, self.log_txt).pack(side=RIGHT, fill=Y)
         self.log_txt.pack(side=LEFT, fill=BOTH, expand=YES)
 
+        # Vazia, a caixa do log parecia mais um campo para digitar. A dica
+        # some no primeiro _limpar_log, quando um backup ou restore começa.
+        self.log_txt.tag_configure("dica", foreground=ui_theme.FG_MUTED,
+                                   font=(ui_theme.FONT_FAMILY, 8))
+        self.log_txt.config(state='normal')
+        self.log_txt.insert('1.0', DICA_LOG, "dica")
+        self.log_txt.config(state='disabled')
+
         card = self._card(self.col_right)
         card.pack(fill=BOTH, expand=YES)
 
         self.var_busca_backup = tk.StringVar()
         self.var_busca_backup.trace_add("write", self._filtrar_backups)
-        self._entrada_clara(card, self.var_busca_backup).pack(fill=X, pady=(0, 10))
+        self._campo_busca(card, self.var_busca_backup, "Buscar backup...").pack(
+            fill=X, pady=(0, 10))
 
-        self.lb_backups = self._tabela(
-            card, "backup", "Arquivo de Backup (.BAK / .MAX / .ZIP)", height=14
-        )
+        # Título curto como o das versões: o anterior, com a lista de
+        # extensões, era cortado assim que o painel da nuvem abria.
+        self.lb_backups = self._tabela(card, "backup", "Backups Locais", height=14)
         self.lb_backups.bind("<<TreeviewSelect>>", self._sugerir_nome_do_banco)
 
     # --- Rodapé -----------------------------------------------------------
@@ -346,7 +419,7 @@ class GerenciadorMaxApp(bstrap.Window):
         bts.pack(side=BOTTOM, fill=X)
 
         self.status = ttk.Label(
-            bts, text="A inicializar...", anchor=W, style="Muted.TLabel"
+            bts, text="Inicializando...", anchor=W, style="Muted.TLabel"
         )
         self.status.pack(side=LEFT, fill=X, expand=YES)
 
@@ -396,14 +469,16 @@ class GerenciadorMaxApp(bstrap.Window):
             client=self.webdav_versoes,
             extensoes=EXTENSOES_VERSAO,
             destino=lambda: self.cfg.pasta_das_versoes,
-            on_complete=self._popular_versoes_locais,
+            on_complete=lambda nome: self._popular_versoes_locais(),
         )
         self.lbl_caminho_backups, self.lb_nuvem_backups = self._montar_aba_nuvem(
             tab_backups,
             client=self.webdav_backups,
             extensoes=EXTENSOES_BACKUP_NUVEM,
             destino=lambda: self.cfg.caminho_base_backup,
-            on_complete=self._load_backups,
+            # Quem baixa um backup vai restaurá-lo: ele já chega selecionado
+            # no Restaurador, com o nome do banco sugerido.
+            on_complete=lambda nome: self._load_backups(selecionar=nome),
         )
 
     def _montar_aba_nuvem(self, parent, client, extensoes, destino, on_complete):
@@ -414,7 +489,8 @@ class GerenciadorMaxApp(bstrap.Window):
             client: WebDAVClient a usar.
             extensoes: Extensões de arquivo a listar.
             destino: Callable que devolve o diretório local de destino.
-            on_complete: Callable a rodar após um download concluído.
+            on_complete: Callable(nome do arquivo) a rodar após um download
+                concluído.
 
         Returns:
             Tupla (label de caminho, treeview).
@@ -458,7 +534,7 @@ class GerenciadorMaxApp(bstrap.Window):
             "outline", side=LEFT, padx=(0, 4),
         )
         self._botao(
-            f_btn, "🔄",
+            f_btn, "⟳",
             lambda: threading.Thread(
                 target=self._popular_nuvem,
                 args=(client, tree, lbl_caminho, extensoes, True),
@@ -473,14 +549,42 @@ class GerenciadorMaxApp(bstrap.Window):
 
         return lbl_caminho, tree
 
+    def _alargar_janela(self, delta):
+        """Alarga (delta > 0) ou estreita a janela, sem passar da tela.
+
+        Se faltar espaço à direita, a janela anda para a esquerda. Maximizada,
+        não mexe em nada.
+
+        Returns:
+            int: Quanto a largura de fato mudou.
+        """
+        if self.state() == 'zoomed':
+            return 0
+        m = re.match(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", self.geometry())
+        if not m:
+            return 0
+        largura, altura, x, y = map(int, m.groups())
+        tela = self.winfo_screenwidth()
+        nova = max(self.minsize()[0], min(largura + delta, tela))
+        x = max(0, min(x, tela - nova))
+        self.geometry(f"{nova}x{altura}+{x}+{y}")
+        return nova - largura
+
     def _toggle_cloud(self):
-        """Abre ou fecha o painel da nuvem."""
+        """Abre ou fecha o painel da nuvem.
+
+        A janela alarga para dar lugar ao painel: antes ele tomava o espaço
+        das três colunas, e os nomes dos backups saíam cortados.
+        """
         if self._cloud_visivel:
             self.cloud_panel.pack_forget()
             self.btn_toggle_cloud.config(text=self._label_aba_nuvem(False))
             self._cloud_visivel = False
+            self._alargar_janela(-self._largura_nuvem)
+            self._largura_nuvem = 0
             return
 
+        self._largura_nuvem = self._alargar_janela(CLOUD_PANEL_WIDTH)
         # `before` é essencial: main_container tem expand=YES e consumiria
         # todo o espaço restante se o painel fosse alocado depois dele.
         self.cloud_panel.pack(side=RIGHT, fill=Y, before=self.main_container)
@@ -557,7 +661,7 @@ class GerenciadorMaxApp(bstrap.Window):
                             lambda s=ini_section: self._testar_conexao(s),
                             "outline", anchor=E, pady=(10, 0))
 
-        self._botao(scroll_frame, "💾  Guardar",
+        self._botao(scroll_frame, "💾  Salvar",
                     lambda: self._salvar_config_aba(cfg_win),
                     "primary", pady=18, anchor=E)
 
@@ -583,15 +687,15 @@ class GerenciadorMaxApp(bstrap.Window):
 
             if janela is not None:
                 janela.destroy()
-            messagebox.showinfo("Sucesso", "Configurações guardadas!")
+            messagebox.showinfo("Sucesso", "Configurações salvas!")
             logger.info("Configurações salvas com sucesso")
             threading.Thread(target=self._carregamento_assincrono, daemon=True).start()
             # O cache foi limpo junto com as credenciais: reaquece agora, para
             # a próxima abertura do painel não pagar a espera de novo.
             threading.Thread(target=self._aquecer_nuvem, daemon=True).start()
         except Exception as e:
-            logger.error("Erro ao guardar configurações: %s", e)
-            messagebox.showerror("Erro", f"Erro ao guardar: {e}")
+            logger.error("Erro ao salvar configurações: %s", e)
+            messagebox.showerror("Erro", f"Erro ao salvar: {e}")
 
     def _testar_conexao(self, secao):
         """Testa SQL ou nuvem com os valores digitados, sem precisar salvar antes."""
@@ -601,7 +705,7 @@ class GerenciadorMaxApp(bstrap.Window):
         for (sec, key), var in self.cfg_vars.items():
             temp.set_campo(sec, key, var.get())
 
-        self.status.config(text="A testar conexão...")
+        self.status.config(text="Testando conexão...")
         threading.Thread(target=self._thread_testar, args=(secao, temp),
                          daemon=True).start()
 
@@ -642,6 +746,19 @@ class GerenciadorMaxApp(bstrap.Window):
     def _filtrar_versoes(self, *args):
         """Filtra a lista de versões locais pelo termo de busca."""
         self._repovoar(self.lb_versoes, self._all_versoes, self.var_busca_versao.get())
+        # Repovoar descarta a seleção
+        self._atualizar_botao_abrir()
+
+    def _atualizar_botao_abrir(self, event=None):
+        """Deixa explícito no botão o que Abrir Sistema vai fazer.
+
+        Com uma versão selecionada ele extrai antes de abrir; sem seleção só
+        abre. Com o mesmo texto nos dois casos, a extração pegava de surpresa
+        quem só queria abrir o sistema.
+        """
+        texto = ("▶  Extrair e Abrir" if self.lb_versoes.selection()
+                 else "▶  Abrir Sistema")
+        self.btn_abrir.config(text=texto)
 
     def _filtrar_backups(self, *args):
         """Filtra a lista de backups locais pelo termo de busca."""
@@ -673,10 +790,10 @@ class GerenciadorMaxApp(bstrap.Window):
         # O aviso vai no cabeçalho da lista, não como uma linha: uma linha de
         # erro poderia ser selecionada e acabar no Excluir Banco(s).
         if erro:
-            self.lb_tools.heading("banco", text="Bases de Dados — sem conexão")
+            self.lb_tools.heading("banco", text="Bancos de Dados — sem conexão")
             self.status.config(text=f"SQL: {erro}")
         else:
-            self.lb_tools.heading("banco", text="Bases de Dados")
+            self.lb_tools.heading("banco", text="Bancos de Dados")
 
     def _carregar_banco_atual_sql(self):
         """Lê o banco atual do max.ini e atualiza a UI."""
@@ -737,7 +854,7 @@ class GerenciadorMaxApp(bstrap.Window):
         except Exception as e:
             logger.warning("Erro ao salvar instância no INI: %s", e)
 
-        self._set_status(f"Instância alterada para: {instancia}. A recarregar bancos...")
+        self._set_status(f"Instância alterada para: {instancia}. Recarregando bancos...")
         threading.Thread(target=self._carregar_banco_atual_sql, daemon=True).start()
 
     def _mudar_banco(self):
@@ -827,10 +944,10 @@ class GerenciadorMaxApp(bstrap.Window):
                 lbl_caminho.config(text=caminho)
                 for i in treeview.get_children():
                     treeview.delete(i)
-                treeview.insert("", END, values=("⏳", "A carregar...", "", ""))
+                treeview.insert("", END, values=("⏳", TEXTO_CARREGANDO, "", ""))
 
             self.after(0, mostrar_carregando)
-            self._set_status(f"Nuvem: a listar {caminho}...")
+            self._set_status(f"Nuvem: listando {caminho}...")
 
         try:
             pastas, arquivos = client.listar(
@@ -892,7 +1009,8 @@ class GerenciadorMaxApp(bstrap.Window):
             client: Instância de WebDAVClient.
             treeview: Treeview onde o arquivo está selecionado.
             destino_dir: Diretório de destino local.
-            on_complete_callback: Função chamada após download bem-sucedido.
+            on_complete_callback: Função chamada com o nome do arquivo após
+                download bem-sucedido.
         """
         sel = treeview.selection()
         if not sel:
@@ -923,7 +1041,7 @@ class GerenciadorMaxApp(bstrap.Window):
         if not messagebox.askyesno(titulo, pergunta):
             return
 
-        self.status.config(text=f"A iniciar download de {nome}...")
+        self.status.config(text=f"Iniciando download de {nome}...")
         threading.Thread(
             target=self._thread_download,
             args=(client, nome, destino_dir, on_complete_callback),
@@ -935,13 +1053,14 @@ class GerenciadorMaxApp(bstrap.Window):
         try:
             client.download(
                 nome, destino_dir,
-                on_progress=lambda pct: self._set_status(f"A baixar {nome}... {pct}%"),
+                on_progress=lambda pct: self._set_status(f"Baixando {nome}... {pct}%"),
             )
 
             self._set_status(f"Download de {nome} concluído!")
             self.after(0, lambda: messagebox.showinfo("Sucesso", f"Download concluído!\n{nome}"))
             if on_complete_callback:
-                threading.Thread(target=on_complete_callback, daemon=True).start()
+                threading.Thread(target=on_complete_callback, args=(nome,),
+                                 daemon=True).start()
         except Exception as e:
             logger.error("Erro no download: %s", e)
             self.after(0, lambda m=str(e): messagebox.showerror("Erro Download", f"Falha:\n{m}"))
@@ -950,8 +1069,12 @@ class GerenciadorMaxApp(bstrap.Window):
     # =========================================================================
     # LÓGICA: BACKUPS LOCAIS
     # =========================================================================
-    def _load_backups(self):
-        """Carrega lista de backups locais, mais recentes primeiro."""
+    def _load_backups(self, selecionar=None):
+        """Carrega lista de backups locais, mais recentes primeiro.
+
+        Args:
+            selecionar: Nome de arquivo a deixar selecionado ao terminar.
+        """
         try:
             if not os.path.exists(self.cfg.caminho_base_backup):
                 return
@@ -964,8 +1087,26 @@ class GerenciadorMaxApp(bstrap.Window):
             backups.sort(key=lambda x: x[1], reverse=True)
             self._all_backups = [b[0] for b in backups]
             self.after(0, self._filtrar_backups)
+            if selecionar:
+                self.after(0, lambda: self._selecionar_backup(selecionar))
         except OSError as e:
             logger.warning("Erro ao listar backups: %s", e)
+
+    def _selecionar_backup(self, nome):
+        """Seleciona um backup na lista do Restaurador. Roda na thread da UI.
+
+        A seleção dispara a sugestão do nome do banco, como um clique faria.
+        """
+        busca = self.var_busca_backup.get()
+        if busca and busca.lower() not in nome.lower():
+            # A busca esconderia o arquivo; limpá-la repovoa a lista (trace)
+            self.var_busca_backup.set("")
+        for item in self.lb_backups.get_children():
+            if self.lb_backups.item(item, "values")[0] == nome:
+                self.lb_backups.selection_set(item)
+                self.lb_backups.focus(item)
+                self.lb_backups.see(item)
+                return
 
     # =========================================================================
     # LÓGICA: LAUNCHER (EXE + ATUALIZAÇÃO)
@@ -1031,7 +1172,7 @@ class GerenciadorMaxApp(bstrap.Window):
                 else:
                     messagebox.showwarning(
                         "Aviso de Versão",
-                        "Versões diferentes e ficheiro de extração não encontrado.\nA ignorar..."
+                        "Versões diferentes e arquivo da versão não encontrado.\nAbrindo assim mesmo..."
                     )
 
             self._abrir_manager()
@@ -1079,7 +1220,7 @@ class GerenciadorMaxApp(bstrap.Window):
     def _thread_extrair(self, arq, ao_terminar):
         """Thread de extração de versão com 7-Zip."""
         try:
-            self._set_status(f"A extrair {arq}...")
+            self._set_status(f"Extraindo {arq}...")
             sevenzip.extrair(
                 self.cfg.caminho_do_7zip,
                 os.path.join(self.cfg.pasta_das_versoes, arq),
@@ -1136,7 +1277,8 @@ class GerenciadorMaxApp(bstrap.Window):
                 "Banco já existe",
                 f"Já existe um banco chamado '{new_db}'.\n\n"
                 f"Continuar SUBSTITUI todo o conteúdo dele pelo backup "
-                f"selecionado. Prosseguir?"
+                f"selecionado, e quem estiver conectado nele será "
+                f"desconectado. Prosseguir?"
             ):
                 return
 
@@ -1171,7 +1313,12 @@ class GerenciadorMaxApp(bstrap.Window):
         self._nome_sugerido = sugestao
 
     def _mostrar_progresso(self, ativo):
-        """Mostra/esconde a barra de progresso e trava o botão de restore."""
+        """Mostra/esconde a barra de progresso e trava backup e restore.
+
+        Os dois travam juntos porque dividem a barra, o log e a fila: um
+        backup iniciado durante um restore apagava o log dele, e o primeiro
+        a terminar escondia a barra do outro.
+        """
         if ativo:
             # Volta ao modo indeterminado a cada operação: o percentual real só
             # começa a chegar alguns segundos depois, quando o SQL Server passa
@@ -1179,11 +1326,13 @@ class GerenciadorMaxApp(bstrap.Window):
             self.progress.config(mode='indeterminate', maximum=100, value=0)
             self.progress.pack(fill=X, pady=(8, 0), before=self.log_wrap)
             self.progress.start()
-            self.btn_restore.config(state='disabled')
+            estado = 'disabled'
         else:
             self.progress.stop()
             self.progress.pack_forget()
-            self.btn_restore.config(state='normal')
+            estado = 'normal'
+        self.btn_restore.config(state=estado)
+        self.btn_backup.config(state=estado)
 
     def _progresso_percentual(self, pct):
         """Fixa o percentual na barra, trocando para o modo determinado."""
@@ -1226,9 +1375,10 @@ class GerenciadorMaxApp(bstrap.Window):
         else:
             alvo = self.lbl_db_atual.cget("text")
 
-        if not alvo or "ERRO" in alvo.upper() or "ENCONTRAD" in alvo.upper():
+        if (not alvo or alvo == TEXTO_CARREGANDO
+                or "ERRO" in alvo.upper() or "ENCONTRAD" in alvo.upper()):
             messagebox.showinfo(
-                "Aviso", "Selecione um banco na lista de Bases de Dados."
+                "Aviso", "Selecione um banco na lista de Bancos de Dados."
             )
             return
 
@@ -1290,7 +1440,7 @@ class GerenciadorMaxApp(bstrap.Window):
     # LÓGICA: DROP DATABASE
     # =========================================================================
     def _drop_database(self):
-        """Elimina bancos selecionados (com confirmação por escrito)."""
+        """Exclui bancos selecionados (com confirmação por escrito)."""
         sel = self.lb_tools.selection()
         if not sel:
             messagebox.showinfo("Aviso", "Selecione ao menos um banco na lista.")
@@ -1299,11 +1449,14 @@ class GerenciadorMaxApp(bstrap.Window):
         bancos_alvo = [self.lb_tools.item(i, "values")[0] for i in sel]
         db_atual = self.lbl_db_atual.cget("text")
 
-        if db_atual in bancos_alvo:
-            bancos_alvo.remove(db_atual)
+        # Sem diferenciar maiúsculas: o max.ini pode ter 'fortup' e o SQL
+        # listar 'FORTUP' — é o mesmo banco, e ele precisa continuar protegido.
+        protegidos = [b for b in bancos_alvo if b.lower() == db_atual.lower()]
+        if protegidos:
+            bancos_alvo = [b for b in bancos_alvo if b not in protegidos]
             messagebox.showwarning(
                 "Proteção",
-                f"O banco atual ({db_atual}) não pode ser eliminado. "
+                f"O banco atual ({protegidos[0]}) não pode ser excluído. "
                 f"Foi removido da sua lista de exclusão."
             )
 
@@ -1311,11 +1464,11 @@ class GerenciadorMaxApp(bstrap.Window):
             return
 
         if len(bancos_alvo) == 1:
-            msg = f"ELIMINAR '{bancos_alvo[0]}' permanentemente?\n\nEscreva EXCLUIR para confirmar:"
+            msg = f"EXCLUIR '{bancos_alvo[0]}' permanentemente?\n\nDigite EXCLUIR para confirmar:"
         else:
             lista_preview = ", ".join(bancos_alvo[:5]) + ("..." if len(bancos_alvo) > 5 else "")
-            msg = (f"ELIMINAR {len(bancos_alvo)} bases de dados permanentemente?\n\n"
-                   f"({lista_preview})\n\nEscreva EXCLUIR para confirmar:")
+            msg = (f"EXCLUIR {len(bancos_alvo)} bancos de dados permanentemente?\n\n"
+                   f"({lista_preview})\n\nDigite EXCLUIR para confirmar:")
 
         confirmacao = simpledialog.askstring("PERIGO", msg, parent=self)
 
@@ -1327,11 +1480,11 @@ class GerenciadorMaxApp(bstrap.Window):
     def _thread_drop(self, bancos):
         """Thread de exclusão de bancos."""
         try:
-            self._set_status(f"A eliminar {len(bancos)} banco(s)...")
+            self._set_status(f"Excluindo {len(bancos)} banco(s)...")
             self.sql.drop_databases(bancos)
-            self.after(0, lambda: messagebox.showinfo("Sucesso", "Bases eliminadas com sucesso!"))
+            self.after(0, lambda: messagebox.showinfo("Sucesso", "Bancos excluídos com sucesso!"))
             self._carregar_banco_atual_sql()
             self._set_status("Pronto.")
         except Exception as e:
-            logger.error("Erro ao eliminar bancos: %s", e)
+            logger.error("Erro ao excluir bancos: %s", e)
             self.after(0, lambda err=str(e): messagebox.showerror("Erro", err))

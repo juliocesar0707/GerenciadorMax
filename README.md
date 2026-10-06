@@ -19,8 +19,10 @@ A janela principal tem três colunas e um painel retrátil da nuvem.
 versões, com campo de busca.
 
 - `▶ Abrir Sistema` — com uma versão selecionada, extrai o `.rar` sobre a pasta do
-  sistema e abre o Manager. Sem seleção, compara a versão do executável com a
-  versão gravada no banco e oferece a atualização se estiverem diferentes.
+  sistema e abre o Manager; o botão passa a dizer `Extrair e Abrir` para deixar
+  isso claro. Sem seleção, compara a versão do executável com a versão gravada no
+  banco e oferece a atualização se estiverem diferentes. Clicar no espaço vazio da
+  lista (ou `Esc`) desfaz a seleção.
 - `⚡ Atualizar Sistema` — extrai a versão selecionada e abre o `MAX_Atualiza.exe`.
 
 Antes de qualquer extração o app verifica se o `MAX_manager2.exe` ou o
@@ -49,11 +51,15 @@ cabeçalho passa a marcar "sem conexão" e a barra de status explica o motivo
 Ao selecionar um backup, o nome do banco é sugerido a partir do nome do arquivo
 (`MAX-Manager_FORTUP_10082026.MAX` → `FORTUP`); um nome digitado à mão nunca é
 sobrescrito pela sugestão. Se o nome escolhido já pertencer a um banco existente,
-o app pergunta antes de continuar — o `RESTORE` roda com `REPLACE`.
+o app pergunta antes de continuar — o `RESTORE` roda com `REPLACE`, e quem estiver
+conectado nesse banco é desconectado antes (`SINGLE_USER WITH ROLLBACK IMMEDIATE`),
+senão o SQL recusaria o restore com o MAX aberto em algum terminal.
 
 O restore extrai o arquivo se estiver compactado, localiza o `.MAX`/`.BAK` lá
-dentro, cria uma pasta `dados{N}` na pasta do sistema, descobre os nomes lógicos
-via `RESTORE FILELISTONLY` e executa o `RESTORE DATABASE` com `MOVE`. A barra de
+dentro, descobre os arquivos do banco via `RESTORE FILELISTONLY`, confere se o
+disco da pasta do sistema tem espaço para eles, cria uma pasta `dados{N}` e
+executa o `RESTORE DATABASE` com um `MOVE` para cada arquivo (`.mdf`, `.ndf`,
+`.ldf`). Se o restore falhar, a pasta `dados{N}` vazia é removida. A barra de
 progresso mostra o **percentual real** publicado pelo SQL Server em
 `sys.dm_exec_requests` — sem a permissão `VIEW SERVER STATE` ela simplesmente
 segue indeterminada. As mensagens de etapa aparecem no log da própria coluna.
@@ -61,11 +67,15 @@ segue indeterminada. As mensagens de etapa aparecem no log da própria coluna.
 **Cloud Maxdata (painel lateral)** — navegador WebDAV do Nextcloud com abas
 separadas para Versões e Backups, mostrando nome, tamanho e data de modificação
 de cada arquivo. Navega nas pastas, baixa o selecionado para a pasta local
-correspondente e atualiza a lista local ao terminar.
+correspondente e atualiza a lista local ao terminar. Um backup baixado já chega
+selecionado no Restaurador, com o nome do banco sugerido. Ao abrir, o painel
+alarga a janela em vez de espremer as três colunas (exceto com a janela
+maximizada).
 
-O download escreve em um `.part` e só renomeia ao concluir, então uma queda de
-conexão não deixa para trás um arquivo truncado com o nome definitivo. Se o
-arquivo já existir localmente, o app pergunta antes de baixar de novo.
+O download confere o espaço livre antes de começar, escreve em um `.part` e só
+renomeia ao concluir, então uma queda de conexão não deixa para trás um arquivo
+truncado com o nome definitivo. Se o arquivo já existir localmente, o app
+pergunta antes de baixar de novo.
 
 ### Por que a nuvem responde rápido
 

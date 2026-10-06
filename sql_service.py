@@ -1,5 +1,6 @@
 """Serviço centralizado de operações SQL Server."""
 
+import collections
 import contextlib
 import datetime
 import logging
@@ -14,6 +15,7 @@ import pyodbc
 import sevenzip
 
 from app_config import SQL_QUERY_VERSAO
+from webdav_client import formatar_tamanho
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +86,38 @@ def sugerir_nome_banco(nome_arquivo):
         and not (p.isdigit() and len(p) >= 6)
     ]
     return '_'.join(uteis) if uteis else base
+
+
+def destinos_do_restore(dbname, arquivos, pasta_dados):
+    """Caminho de destino de cada arquivo do backup dentro de `pasta_dados`.
+
+    Todos precisam de um MOVE: o que ficar sem ele volta para o caminho
+    gravado no backup, que é o da máquina onde o backup foi feito — e o
+    RESTORE falha quando essa pasta não existe aqui. Bancos com mais de um
+    arquivo de dados (.ndf) ou de log caíam exatamente nisso.
+
+    Args:
+        dbname: Nome do banco restaurado, usado nos nomes de arquivo.
+        arquivos: Saída de `SqlService.restore_filelistonly`.
+        pasta_dados: Pasta `dadosN` criada para este restore.
+
+    Returns:
+        list[tuple[str, str]]: (nome lógico, caminho de destino).
+    """
+    destinos = []
+    contagem = collections.Counter()
+    for logico, tipo, _ in arquivos:
+        n = contagem[tipo]
+        contagem[tipo] += 1
+        if tipo == 'D':
+            nome = f"{dbname}.mdf" if n == 0 else f"{dbname}_{n}.ndf"
+        elif tipo == 'L':
+            nome = f"{dbname}_log.ldf" if n == 0 else f"{dbname}_log{n}.ldf"
+        else:
+            # FILESTREAM ('S') e full-text ('F') vão para uma pasta, não arquivo
+            nome = f"{dbname}_{logico}"
+        destinos.append((logico, os.path.join(pasta_dados, nome)))
+    return destinos
 
 
 class SqlService:
@@ -211,10 +245,10 @@ class SqlService:
         return instancias
 
     def drop_databases(self, bancos):
-        """Elimina múltiplos bancos de dados permanentemente.
+        """Exclui múltiplos bancos de dados permanentemente.
 
         Args:
-            bancos: Lista de nomes de bancos a eliminar.
+            bancos: Lista de nomes de bancos a excluir.
 
         Raises:
             pyodbc.Error: Se algum DROP falhar.
@@ -226,7 +260,7 @@ class SqlService:
                 safe_name = self.sanitize_db_name(db)
                 cursor.execute(f"ALTER DATABASE [{safe_name}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE")
                 cursor.execute(f"DROP DATABASE [{safe_name}]")
-                logger.info("Banco eliminado: %s", db)
+                logger.info("Banco excluído: %s", db)
 
     # =========================================================================
     # ACOMPANHAMENTO DE PROGRESSO (BACKUP / RESTORE)
@@ -324,52 +358,70 @@ class SqlService:
             return False
 
     def restore_filelistonly(self, backup_path):
-        """Obtém nomes lógicos de um arquivo de backup.
+        """Lista os arquivos que o backup recria.
 
         Args:
             backup_path: Caminho completo do arquivo .BAK/.MAX.
 
         Returns:
-            Tupla (logical_data, logical_log).
+            list[tuple[str, str, int]]: (nome lógico, tipo, tamanho em bytes)
+                de cada arquivo, na ordem do backup. Tipo 'D' é dados, 'L' é
+                log; 'S' (FILESTREAM) e 'F' (full-text) também podem aparecer.
         """
         with pyodbc.connect(self._conn_str_auth(), autocommit=True) as conn:
             cursor = conn.cursor()
             cursor.execute("RESTORE FILELISTONLY FROM DISK = ?", backup_path)
-            ld, ll = None, None
-            for r in cursor.fetchall():
-                if r.Type == 'D':
-                    ld = r.LogicalName
-                if r.Type == 'L':
-                    ll = r.LogicalName
-            return ld, ll
+            return [(r.LogicalName, r.Type, int(r.Size or 0))
+                    for r in cursor.fetchall()]
 
-    def restore_database(self, dbname, backup_path, mdf_path, ldf_path,
-                         logical_data, logical_log, on_progress=None):
+    def restore_database(self, dbname, backup_path, destinos, on_progress=None):
         """Executa RESTORE DATABASE.
 
         Args:
             dbname: Nome do novo banco.
             backup_path: Caminho do arquivo .BAK/.MAX.
-            mdf_path: Caminho destino do arquivo .mdf.
-            ldf_path: Caminho destino do arquivo .ldf.
-            logical_data: Nome lógico do arquivo de dados.
-            logical_log: Nome lógico do arquivo de log.
+            destinos: Lista (nome lógico, caminho de destino) com um item para
+                cada arquivo do backup — ver `destinos_do_restore`.
             on_progress: Callback(percentual: float).
         """
         safe_name = self.sanitize_db_name(dbname)
+        moves = ", ".join(
+            f"MOVE '{escapar_literal(logico)}' TO '{escapar_literal(caminho)}'"
+            for logico, caminho in destinos
+        )
         sql = (
             f"RESTORE DATABASE [{safe_name}] FROM DISK='{escapar_literal(backup_path)}' "
-            f"WITH MOVE '{escapar_literal(logical_data)}' TO '{escapar_literal(mdf_path)}', "
-            f"MOVE '{escapar_literal(logical_log)}' TO '{escapar_literal(ldf_path)}', "
-            f"REPLACE, STATS = 5"
+            f"WITH {moves}, REPLACE, STATS = 5"
         )
         logger.info("Executando RESTORE DATABASE [%s]", dbname)
         with pyodbc.connect(self._conn_str_auth(), autocommit=True) as conn:
-            with self._acompanhando(conn, on_progress):
-                cursor = conn.cursor()
-                cursor.execute(sql)
-                while cursor.nextset():
-                    pass
+            # Com REPLACE sobre um banco existente, qualquer conexão aberta
+            # nele (o MAX aberto em algum terminal) faz o SQL recusar o RESTORE
+            # por falta de acesso exclusivo. O Excluir já derruba as conexões
+            # antes; aqui é o mesmo.
+            existe = conn.cursor().execute(
+                "SELECT DB_ID(?)", dbname).fetchone()[0] is not None
+            if existe:
+                logger.info("Derrubando conexões abertas em [%s]", dbname)
+                conn.cursor().execute(
+                    f"ALTER DATABASE [{safe_name}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE"
+                )
+            try:
+                with self._acompanhando(conn, on_progress):
+                    cursor = conn.cursor()
+                    cursor.execute(sql)
+                    while cursor.nextset():
+                        pass
+            finally:
+                if existe:
+                    # Um RESTORE que falhou deixaria o banco antigo preso em
+                    # SINGLE_USER, aceitando uma conexão só.
+                    try:
+                        conn.cursor().execute(
+                            f"ALTER DATABASE [{safe_name}] SET MULTI_USER")
+                    except pyodbc.Error as e:
+                        logger.warning("Não foi possível voltar [%s] para "
+                                       "MULTI_USER: %s", dbname, e)
         logger.info("RESTORE DATABASE [%s] concluído com sucesso", dbname)
 
     def executar_restore_completo(self, fname, dbname, caminho_backup, pasta_sistema,
@@ -394,6 +446,7 @@ class SqlService:
             logger.info(texto)
 
         tmp_dir = None
+        pasta_dados = None
         try:
             msg(f"--- Iniciando Restore: {dbname} ---")
             origem = os.path.join(caminho_backup, fname)
@@ -401,7 +454,7 @@ class SqlService:
 
             # Extração se necessário
             if fname.lower().endswith(('.zip', '.rar')):
-                msg("A extrair ficheiro...")
+                msg("Extraindo arquivo compactado...")
                 tmp_dir = os.path.join(caminho_backup, f"_tmp_{int(time.time())}")
                 os.makedirs(tmp_dir, exist_ok=True)
                 sevenzip.extrair(caminho_7zip, origem, tmp_dir)
@@ -413,9 +466,26 @@ class SqlService:
                     None
                 )
                 if not encontrado:
-                    raise FileNotFoundError("Ficheiro .MAX/.BAK não encontrado no arquivo.")
+                    raise FileNotFoundError("Nenhum .MAX/.BAK dentro do arquivo compactado.")
                 final = encontrado
                 msg(f"Encontrado: {os.path.basename(final)}")
+
+            arquivos = self.restore_filelistonly(final)
+
+            # O RESTORE recria os arquivos no tamanho original, e um disco
+            # cheio só aparecia perto do fim, depois de minutos de espera.
+            necessario = sum(tamanho for _, _, tamanho in arquivos)
+            livre = shutil.disk_usage(pasta_sistema).free
+            if necessario > livre:
+                falta = (f"Espaço insuficiente em {pasta_sistema}: o banco "
+                         f"precisa de {formatar_tamanho(necessario)} e há "
+                         f"{formatar_tamanho(livre)} livres.")
+                # Substituindo um banco existente, o SQL descarta os arquivos
+                # do antigo, então a conta acima pode estar exagerada — avisa
+                # e segue em vez de barrar.
+                if not self.banco_existe(dbname):
+                    raise OSError(falta)
+                msg(f"Aviso: {falta}")
 
             # Criar pasta de dados
             i = 1
@@ -423,18 +493,25 @@ class SqlService:
                 d = os.path.join(pasta_sistema, f"dados{i}")
                 if not os.path.exists(d):
                     os.makedirs(d)
+                    pasta_dados = d
                     break
                 i += 1
-            mdf = os.path.join(d, f"{dbname}.mdf")
-            ldf = os.path.join(d, f"{dbname}_log.ldf")
-
-            # Obter nomes lógicos
-            ld, ll = self.restore_filelistonly(final)
 
             # Restaurar
-            msg("A restaurar SQL...")
-            self.restore_database(dbname, final, mdf, ldf, ld, ll,
-                                  on_progress=on_progress)
+            msg("Restaurando no SQL Server...")
+            self.restore_database(
+                dbname, final, destinos_do_restore(dbname, arquivos, pasta_dados),
+                on_progress=on_progress,
+            )
+
+        except Exception:
+            # Cada tentativa que falhava deixava uma pasta dadosN vazia para
+            # trás. rmdir só remove pasta vazia: se o SQL chegou a criar
+            # arquivos lá, eles ficam para análise.
+            if pasta_dados:
+                with contextlib.suppress(OSError):
+                    os.rmdir(pasta_dados)
+            raise
 
         finally:
             if tmp_dir and os.path.exists(tmp_dir):

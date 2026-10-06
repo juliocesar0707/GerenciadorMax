@@ -285,7 +285,7 @@ class AppConfig:
         if not os.path.isdir(self.caminho_base_backup):
             erros.append(f"Pasta Backups: {self.caminho_base_backup}")
         if not os.path.exists(self.caminho_do_ini):
-            erros.append(f"Ficheiro INI: {self.caminho_do_ini}")
+            erros.append(f"Arquivo INI: {self.caminho_do_ini}")
         if not os.path.exists(self.caminho_do_7zip):
             erros.append(f"7-Zip: {self.caminho_do_7zip}")
 

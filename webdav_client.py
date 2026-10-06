@@ -22,6 +22,7 @@ import collections
 import email.utils
 import http.client
 import os
+import shutil
 import threading
 import time
 import xml.etree.ElementTree as ET
@@ -361,6 +362,18 @@ class WebDAVClient:
                     open(parcial, 'wb') as out_file:
                 tamanho_total = response.getheader('content-length')
                 tamanho_total = int(tamanho_total) if tamanho_total else None
+
+                # Sem esta conta, um disco cheio só aparecia no meio do
+                # download, como um erro de escrita genérico.
+                if tamanho_total:
+                    livre = shutil.disk_usage(destino_dir).free
+                    if tamanho_total > livre:
+                        raise OSError(
+                            f"Espaço insuficiente em {destino_dir}: o arquivo tem "
+                            f"{formatar_tamanho(tamanho_total)} e há "
+                            f"{formatar_tamanho(livre)} livres."
+                        )
+
                 bloco = 1024 * 64  # 64KB
 
                 while True:

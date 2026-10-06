@@ -191,8 +191,24 @@ def ajustar_estilos_derivados(style):
     - scrollbar: a cor sai de um ajuste de HSV sobre o bootstyle, o que
       destoa do cinza discreto que o tema claro pede;
     - combobox readonly: o ttkbootstrap pinta o campo inteiro com a cor
-      primária, deixando a caixa chapada.
+      primária, deixando a caixa chapada;
+    - abas do painel da nuvem: a selecionada sai com o cinza do fundo da
+      janela e a outra com o branco dos campos. Com o conteúdo branco, a
+      leitura se inverte e a aba ativa parece a inativa.
     """
+    try:
+        style.configure("TNotebook", background=CARD, lightcolor=CARD,
+                        darkcolor=CARD)
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", CARD), ("!selected", SURFACE)],
+            lightcolor=[("selected", CARD), ("!selected", SURFACE)],
+            foreground=[("selected", FG), ("!selected", FG_MUTED)],
+            padding=[("selected", (14, 6)), ("!selected", (14, 6))],
+        )
+    except Exception:  # estilo ainda não construído
+        pass
+
     for nome in ("secondary.Round.Vertical.TScrollbar",
                  "secondary.Vertical.TScrollbar"):
         try:
