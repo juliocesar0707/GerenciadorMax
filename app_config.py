@@ -36,7 +36,7 @@ SQL_QUERY_VERSAO = "select cofMaxAtualizaVersao from config"
 # Extensões de arquivo aceitas
 EXTENSOES_VERSAO = ('.rar',)
 EXTENSOES_BACKUP = ('.max', '.bak', '.zip', '.rar')
-EXTENSOES_BACKUP_NUVEM = ('.bak', '.zip', '.rar')
+EXTENSOES_BACKUP_NUVEM = ('.max', '.bak', '.zip', '.rar')
 
 # Mapeamento (section, key) → campo do AppConfig
 # Usado pela aba de configurações para popular/salvar

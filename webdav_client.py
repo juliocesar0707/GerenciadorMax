@@ -286,7 +286,7 @@ class WebDAVClient:
         vencido = (time.time() - momento) >= self.cache_ttl
         return pastas, self._filtrar(todos, extensoes), vencido
 
-    def listar(self, path=None, force_refresh=False, extensoes=('.rar',)):
+    def listar(self, path=None, force_refresh=False, extensoes=('.rar', '.zip')):
         """Lista pastas e arquivos em um caminho WebDAV.
 
         Args:
